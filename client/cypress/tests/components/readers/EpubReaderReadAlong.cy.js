@@ -101,7 +101,10 @@ describe('<EpubReader /> read along', () => {
     const eventBus = new Vue()
     const events = { seeks: [], plays: [] }
     eventBus.$on('player-get-time', (callback) => callback({ libraryItemId: 'book', time: clock.time, playing: true }))
-    eventBus.$on('playback-seek', (time) => events.seeks.push(time))
+    eventBus.$on('playback-seek', (time) => {
+      events.seeks.push(time)
+      clock.time = time
+    })
     eventBus.$on('play-item', (payload) => events.plays.push(payload))
     const state = Vue.observable({ streamLibraryItem: streaming ? { id: 'book' } : null, streamIsPlaying: streaming })
     const mocks = {
@@ -116,6 +119,8 @@ describe('<EpubReader /> read along', () => {
     cy.viewport(1100, 750)
     return cy.mount(EpubReader, { propsData: { libraryItem: { id: 'book', hasTranscript: true, media: {} }, keepProgress: false }, mocks }).then(({ wrapper }) => {
       cy.wrap(wrapper.vm, { timeout: 20000 }).its('readAlongAvailable').should('be.true')
+      // The first page is displayed (page turns and locations need epub.js' view manager)
+      cy.wrap(wrapper.vm, { timeout: 20000 }).should((vm) => expect(vm.rendition.manager && vm.rendition.currentLocation()?.start).to.exist)
       return cy.wrap({ vm: wrapper.vm, clock, events, state })
     })
   }
@@ -271,6 +276,27 @@ describe('<EpubReader /> read along', () => {
         expect(isVisible(vm, index), 'that word is on the page').to.be.true
         expect(isVisible(vm, index - 1), 'and is the first one on it').to.be.false
       })
+    })
+  })
+
+  it('moves the narration to the page being read when reading ahead of the audio', () => {
+    mount().then(({ vm, events }) => {
+      cy.wrap(null, { timeout: 10000 }).should(() => expect(highlighted(WORD_HIGHLIGHT)).to.equal(words[0].w))
+      cy.then(() => vm.next())
+      cy.wait(400)
+      cy.then(() => vm.next())
+      cy.contains('button', Strings.ButtonReturnToNarration).should('be.visible')
+      cy.contains('button', Strings.ButtonPlayFromHere).should('be.visible').click()
+      cy.then(() => {
+        expect(events.plays, 'the open player is not restarted').to.have.length(0)
+        expect(events.seeks).to.have.length(1)
+        const index = words.findIndex((w) => w.start === events.seeks[0])
+        expect(index, 'seeks to a word').to.be.greaterThan(0)
+        expect(isVisible(vm, index), 'that word is on the page').to.be.true
+        expect(isVisible(vm, index - 1), 'and is the first one on it').to.be.false
+      })
+      // Following the narration again
+      cy.contains('button', Strings.ButtonReturnToNarration).should('not.exist')
     })
   })
 })

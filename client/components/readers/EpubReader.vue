@@ -1,9 +1,9 @@
 <template>
   <div id="epub-reader" class="h-full w-full relative">
-    <!-- Read along with the audiobook (ebook transcript): start playback here, or go back to the narrated page -->
-    <div v-if="readAlongAvailable && (!isStreamingThisItem || !readAlongFollowing)" class="absolute bottom-2 left-1/2 -translate-x-1/2 z-10">
-      <button v-if="!isStreamingThisItem" type="button" class="readalong-btn" @click="playFromHere"><span class="material-symbols fill text-xl pr-1">play_arrow</span>{{ $strings.ButtonPlayFromHere }}</button>
-      <button v-else type="button" class="readalong-btn" @click="returnToNarration"><span class="material-symbols text-xl pr-1">my_location</span>{{ $strings.ButtonReturnToNarration }}</button>
+    <!-- Read along with the audiobook (ebook transcript): play from this page (also when reading ahead of the audio), or go back to the narrated page -->
+    <div v-if="readAlongAvailable && (!isStreamingThisItem || !readAlongFollowing)" class="absolute bottom-2 left-1/2 -translate-x-1/2 z-10 flex items-center gap-2">
+      <button type="button" class="readalong-btn" @click="playFromHere"><span class="material-symbols fill text-xl pr-1">play_arrow</span>{{ $strings.ButtonPlayFromHere }}</button>
+      <button v-if="isStreamingThisItem" type="button" class="readalong-btn" @click="returnToNarration"><span class="material-symbols text-xl pr-1">my_location</span>{{ $strings.ButtonReturnToNarration }}</button>
     </div>
     <div class="h-full flex items-center justify-center">
       <button type="button" aria-label="Previous page" class="w-24 max-w-24 h-full hidden sm:flex items-center overflow-x-hidden justify-center opacity-50 hover:opacity-100">
@@ -243,8 +243,18 @@ export default {
     },
     playFromHere() {
       const startTime = this.readAlong?.firstVisibleWordTime() ?? 0
-      this.readAlong?.resumeFollowing()
-      this.$eventBus.$emit('play-item', { libraryItemId: this.libraryItemId, startTime })
+      if (this.readAlong) {
+        // Highlight the new start first, so following does not turn back to the old narration page
+        this.readAlong.update(startTime, true)
+        this.readAlong.resumeFollowing()
+      }
+      if (this.isStreamingThisItem) {
+        // Jump the open player to this page (e.g. after reading ahead of the audio) and play
+        this.$eventBus.$emit('playback-seek', startTime)
+        if (!this.isPlaying) this.$eventBus.$emit('play-item', { libraryItemId: this.libraryItemId })
+      } else {
+        this.$eventBus.$emit('play-item', { libraryItemId: this.libraryItemId, startTime })
+      }
     },
     returnToNarration() {
       this.readAlong?.resumeFollowing()

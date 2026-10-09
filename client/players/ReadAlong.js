@@ -19,6 +19,9 @@ const WHITESPACE = /\s/
 const EPUB_NS = 'http://www.idpf.org/2007/ops'
 const LOOKAHEAD_TOKENS = 4000
 
+/** Range.START_TO_START */
+const START_TO_START = 0
+
 export const WORD_HIGHLIGHT = 'abs-readalong-word'
 export const SENTENCE_HIGHLIGHT = 'abs-readalong-sentence'
 const HIGHLIGHT_CSS = `::highlight(${WORD_HIGHLIGHT}) { background-color: rgba(250, 204, 21, 0.55); }
@@ -372,8 +375,19 @@ export default class ReadAlong {
     return -1
   }
 
-  /** Book time of the first narrated word on the current page, to start playback from there */
+  /** Book time of the first narrated word on the current page (or after it), to start playback from there */
   firstVisibleWordTime() {
+    // The page epub.js shows: its first position as a CFI in a section (no page before the first display)
+    let start = null
+    try {
+      start = this.rendition.manager ? this.rendition.currentLocation()?.start : null
+    } catch (error) {
+      start = null
+    }
+    if (start && Number.isInteger(start.index)) {
+      const time = this.firstWordTimeFrom(start.index, start.cfi)
+      if (time !== null) return time
+    }
     const spines = [...this.sections.keys()].sort((a, b) => a - b)
     for (const spine of spines) {
       const entry = this.sections.get(spine)
@@ -388,6 +402,42 @@ export default class ReadAlong {
       if (entry.mapped) return this.index.wordStarts[entry.firstWord]
     }
     return null
+  }
+
+  /** First narrated word at or after a position of a section, or the first narrated word of a later section */
+  firstWordTimeFrom(spine, cfi) {
+    const entry = this.sections.get(spine)
+    if (entry && this.isAttached(entry) && cfi) {
+      let start = null
+      try {
+        start = entry.contents.range(cfi)
+      } catch (error) {
+        start = null
+      }
+      if (start) {
+        // Word ranges are in document order: binary search the first one starting at or after the page start
+        const mapped = []
+        entry.ranges.forEach((range, k) => range && mapped.push(k))
+        let low = 0
+        let high = mapped.length - 1
+        let found = -1
+        while (low <= high) {
+          const mid = (low + high) >> 1
+          if (entry.ranges[mapped[mid]].compareBoundaryPoints(START_TO_START, start) >= 0) {
+            found = mid
+            high = mid - 1
+          } else {
+            low = mid + 1
+          }
+        }
+        if (found >= 0) return this.index.wordStarts[entry.firstWord + mapped[found]]
+      }
+    } else if (this.spineWords.has(spine)) {
+      return this.index.wordStarts[this.spineWords.get(spine).firstWord]
+    }
+    // Nothing narrated from here in this section (e.g. a title page): the next section with narrated words
+    const next = [...this.spineWords.keys()].filter((s) => s > spine).sort((a, b) => a - b)[0]
+    return next === undefined ? null : this.index.wordStarts[this.spineWords.get(next).firstWord]
   }
 
   destroy() {
