@@ -79,6 +79,9 @@
             </div>
           </div>
 
+          <!-- Transcript job running on the local transcribe helper -->
+          <widgets-transcript-job-status v-if="transcriptJob" :job="transcriptJob" @cancel="cancelTranscriptJob" @dismiss="dismissTranscriptJob" />
+
           <!-- Icon buttons -->
           <div class="flex items-center justify-center md:justify-start pt-4">
             <ui-btn v-if="showPlayButton" :disabled="isStreaming" color="bg-success" :padding-x="4" small class="flex items-center h-9 mr-2" @click="playItem">
@@ -365,6 +368,17 @@ export default {
     showCollectionsButton() {
       return this.isBook && this.userCanUpdate
     },
+    hasTranscript() {
+      return !!this.libraryItem.hasTranscript
+    },
+    transcriptJob() {
+      return this.$store.getters['transcripts/getJob'](this.libraryItemId)
+    },
+    canCreateTranscript() {
+      if (!this.isBook || !this.tracks.length || !this.userCanUpdate) return false
+      if (this.$store.getters['transcripts/getIsJobActive'](this.libraryItemId)) return false
+      return this.$store.getters['transcripts/getCanCreateTranscripts']
+    },
     contextMenuItems() {
       const items = []
 
@@ -420,6 +434,20 @@ export default {
         items.push({
           text: this.$strings.LabelShare,
           action: 'share'
+        })
+      }
+
+      if (this.canCreateTranscript) {
+        items.push({
+          text: this.hasTranscript ? this.$strings.ButtonRecreateTranscript : this.$strings.ButtonCreateTranscript,
+          action: 'create-transcript'
+        })
+      }
+
+      if (this.hasTranscript && this.userCanDelete) {
+        items.push({
+          text: this.$strings.ButtonDeleteTranscript,
+          action: 'delete-transcript'
         })
       }
 
@@ -776,11 +804,67 @@ export default {
       } else if (action === 'share') {
         this.$store.commit('setSelectedLibraryItem', this.libraryItem)
         this.$store.commit('globals/setShareModal', this.mediaItemShare)
+      } else if (action === 'create-transcript') {
+        this.createTranscriptClick()
+      } else if (action === 'delete-transcript') {
+        this.deleteTranscriptClick()
       }
+    },
+    createTranscriptClick() {
+      if (!this.hasTranscript) return this.startTranscriptJob()
+      const payload = {
+        message: this.$strings.MessageConfirmRecreateTranscript,
+        callback: (confirmed) => {
+          if (confirmed) this.startTranscriptJob()
+        },
+        type: 'yesNo'
+      }
+      this.$store.commit('globals/setConfirmPrompt', payload)
+    },
+    async startTranscriptJob() {
+      // The helper downloads audio from the same server address the browser uses
+      const absBaseUrl = process.env.NODE_ENV === 'development' ? process.env.serverUrl : `${window.location.origin}${this.$config.routerBasePath}`
+      try {
+        await this.$store.dispatch('transcripts/startJob', { libraryItem: this.libraryItem, absBaseUrl })
+      } catch (error) {
+        console.error('Failed to start transcript job', error)
+        this.$toast.error(error.message)
+      }
+    },
+    cancelTranscriptJob() {
+      this.$store.dispatch('transcripts/cancelJob', this.libraryItemId)
+    },
+    dismissTranscriptJob() {
+      this.$store.dispatch('transcripts/dismissJob', this.libraryItemId)
+    },
+    deleteTranscriptClick() {
+      const payload = {
+        message: this.$strings.MessageConfirmDeleteTranscript,
+        yesButtonText: this.$strings.ButtonDelete,
+        yesButtonColor: 'error',
+        callback: (confirmed) => {
+          if (!confirmed) return
+          this.$axios
+            .$delete(`/api/items/${this.libraryItemId}/transcript`)
+            .then(() => {
+              this.$toast.success(this.$strings.ToastTranscriptDeleted)
+            })
+            .catch((error) => {
+              console.error('Failed to delete transcript', error)
+              this.$toast.error(this.$strings.ToastTranscriptDeleteFailed)
+            })
+        },
+        type: 'yesNo'
+      }
+      this.$store.commit('globals/setConfirmPrompt', payload)
     }
   },
   mounted() {
     this.checkDescriptionClamped()
+
+    if (this.isBook && this.userCanUpdate) {
+      this.$store.dispatch('transcripts/checkHelper')
+    }
 
     this.episodeDownloadsQueued = this.libraryItem.episodeDownloadsQueued || []
     this.episodesDownloading = this.libraryItem.episodesDownloading || []
