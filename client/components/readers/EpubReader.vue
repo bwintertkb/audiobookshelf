@@ -1,5 +1,10 @@
 <template>
-  <div id="epub-reader" class="h-full w-full">
+  <div id="epub-reader" class="h-full w-full relative">
+    <!-- Read along with the audiobook (ebook transcript): start playback here, or go back to the narrated page -->
+    <div v-if="readAlongAvailable && (!isStreamingThisItem || !readAlongFollowing)" class="absolute bottom-2 left-1/2 -translate-x-1/2 z-10">
+      <button v-if="!isStreamingThisItem" type="button" class="readalong-btn" @click="playFromHere"><span class="material-symbols fill text-xl pr-1">play_arrow</span>{{ $strings.ButtonPlayFromHere }}</button>
+      <button v-else type="button" class="readalong-btn" @click="returnToNarration"><span class="material-symbols text-xl pr-1">my_location</span>{{ $strings.ButtonReturnToNarration }}</button>
+    </div>
     <div class="h-full flex items-center justify-center">
       <button type="button" aria-label="Previous page" class="w-24 max-w-24 h-full hidden sm:flex items-center overflow-x-hidden justify-center opacity-50 hover:opacity-100">
         <span v-if="hasPrev" class="material-symbols text-6xl" @mousedown.prevent @click="prev">chevron_left</span>
@@ -16,6 +21,10 @@
 
 <script>
 import ePub from 'epubjs'
+import ReadAlong from '@/players/ReadAlong'
+
+const READ_ALONG_PLAYING_POLL_MS = 50
+const READ_ALONG_PAUSED_POLL_MS = 250
 
 /**
  * @typedef {object} EpubReader
@@ -41,6 +50,8 @@ export default {
       /** @type {ePub.Rendition} */
       rendition: null,
       chapters: [],
+      readAlongAvailable: false,
+      readAlongFollowing: true,
       ereaderSettings: {
         theme: 'dark',
         font: 'serif',
@@ -54,12 +65,24 @@ export default {
   watch: {
     playerOpen() {
       this.resize()
+    },
+    isStreamingThisItem() {
+      this.startReadAlongLoop()
+    },
+    isPlaying() {
+      this.startReadAlongLoop()
     }
   },
   computed: {
     /** @returns {string} */
     libraryItemId() {
       return this.libraryItem?.id
+    },
+    isStreamingThisItem() {
+      return !!this.libraryItemId && this.$store.state.streamLibraryItem?.id === this.libraryItemId
+    },
+    isPlaying() {
+      return this.$store.state.streamIsPlaying
     },
     allowScriptedContent() {
       return this.$store.getters['libraries/getLibraryEpubsAllowScriptedContent']
@@ -147,15 +170,84 @@ export default {
     },
     prev() {
       if (!this.rendition?.manager) return
+      this.readAlong?.pauseFollowing()
       return this.rendition?.prev()
     },
     next() {
       if (!this.rendition?.manager) return
+      this.readAlong?.pauseFollowing()
       return this.rendition?.next()
     },
     goToChapter(href) {
       if (!this.rendition?.manager) return
+      this.readAlong?.pauseFollowing()
       return this.rendition?.display(href)
+    },
+    /** Read along with the audiobook when the item has a transcript made from this ebook */
+    async loadReadAlong() {
+      if (!this.libraryItem?.hasTranscript || this.fileId) return
+      let transcript
+      try {
+        transcript = await this.$axios.$get(`/api/items/${this.libraryItemId}/transcript`, { progress: false })
+      } catch (error) {
+        console.error('EpubReader.loadReadAlong failed', error)
+        return
+      }
+      if (!ReadAlong.isSupported(transcript) || !this.rendition || this._isDestroyed) return
+      this.readAlong = new ReadAlong({
+        rendition: this.rendition,
+        transcript,
+        onSeek: (time) => this.$eventBus.$emit('playback-seek', time),
+        onFollowChanged: (following) => {
+          this.readAlongFollowing = following
+        }
+      })
+      const views = this.rendition.views()?.all?.() || []
+      views.forEach((view) => this.readAlong.onRendered(view.section, view))
+      this.readAlongAvailable = true
+      this.startReadAlongLoop()
+    },
+    startReadAlongLoop() {
+      this.stopReadAlongLoop()
+      if (!this.readAlong || !this.isStreamingThisItem) return
+      if (this.isPlaying) {
+        // Every frame while playing (a word can last a couple of frames at high speeds), plus a timer in case frames are throttled
+        const step = () => {
+          this.readAlongFrame = requestAnimationFrame(step)
+          this.readAlongTick()
+        }
+        this.readAlongFrame = requestAnimationFrame(step)
+        this.readAlongTimer = setInterval(this.readAlongTick, READ_ALONG_PLAYING_POLL_MS)
+      } else {
+        this.readAlongTimer = setInterval(this.readAlongTick, READ_ALONG_PAUSED_POLL_MS)
+      }
+      this.readAlongTick(true)
+    },
+    stopReadAlongLoop() {
+      if (this.readAlongFrame) cancelAnimationFrame(this.readAlongFrame)
+      clearInterval(this.readAlongTimer)
+      this.readAlongFrame = null
+      this.readAlongTimer = null
+    },
+    readAlongTick(force = false) {
+      let state = null
+      this.$eventBus.$emit('player-get-time', (value) => (state = value))
+      if (!state || state.libraryItemId !== this.libraryItemId) return
+      try {
+        this.readAlong.update(state.time, force)
+      } catch (error) {
+        // Runs every frame: report once instead of flooding the console
+        if (!this.readAlongErrorLogged) console.error('EpubReader read along failed', error)
+        this.readAlongErrorLogged = true
+      }
+    },
+    playFromHere() {
+      const startTime = this.readAlong?.firstVisibleWordTime() ?? 0
+      this.readAlong?.resumeFollowing()
+      this.$eventBus.$emit('play-item', { libraryItemId: this.libraryItemId, startTime })
+    },
+    returnToNarration() {
+      this.readAlong?.resumeFollowing()
     },
     /** @returns {object} Returns the chapter that the `position` in the book is in */
     findChapterFromPosition(chapters, position) {
@@ -350,8 +442,12 @@ export default {
       // load saved progress
       reader.rendition.display(this.savedEbookLocation || reader.book.locations.start)
 
-      reader.rendition.on('rendered', () => {
+      reader.rendition.on('rendered', (section, view) => {
         this.applyTheme()
+        this.readAlong?.onRendered(section, view)
+      })
+      reader.rendition.on('removed', (section, view) => {
+        this.readAlong?.onRemoved(section, view)
       })
 
       reader.book.ready
@@ -377,6 +473,7 @@ export default {
             })
           }
           this.getChapters()
+          this.loadReadAlong()
         })
         .catch((error) => {
           console.error('EpubReader.initEpub failed:', error)
@@ -453,7 +550,8 @@ export default {
     resize() {
       this.windowWidth = window.innerWidth
       this.windowHeight = window.innerHeight
-      this.rendition?.resize(this.readerWidth, this.readerHeight * 0.8)
+      // The manager only exists once the first section is displayed
+      if (this.rendition?.manager) this.rendition.resize(this.readerWidth, this.readerHeight * 0.8)
     },
     applyTheme() {
       if (!this.rendition) return
@@ -470,7 +568,27 @@ export default {
   },
   beforeDestroy() {
     window.removeEventListener('resize', this.resize)
+    this.stopReadAlongLoop()
+    this.readAlong?.destroy()
     this.book?.destroy()
   }
 }
 </script>
+
+<style scoped>
+.readalong-btn {
+  display: flex;
+  align-items: center;
+  white-space: nowrap;
+  border-radius: 9999px;
+  padding: 0.25rem 0.9rem 0.25rem 0.6rem;
+  font-size: 0.875rem;
+  background-color: rgb(35 35 35 / 0.85);
+  color: white;
+  border: 1px solid rgb(255 255 255 / 0.25);
+  box-shadow: 0 4px 12px rgb(0 0 0 / 0.3);
+}
+.readalong-btn:hover {
+  border-color: rgb(255 255 255 / 0.6);
+}
+</style>

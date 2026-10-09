@@ -307,6 +307,11 @@ export default {
     getPlayerCurrentTime() {
       return this.playerHandler.getCurrentTime()
     },
+    /** For the ebook reader's read-along: callback receives the playing item and its current time */
+    providePlayerTime(callback) {
+      if (!this.libraryItemId) return
+      callback({ libraryItemId: this.libraryItemId, time: this.playerHandler.getCurrentTime(), playing: this.isPlaying })
+    },
     setShowTranscriptPanel(show) {
       this.showTranscriptPanel = show
       this.$store.dispatch('user/updateUserSettings', { showTranscriptPanel: show })
@@ -569,6 +574,7 @@ export default {
     this.$eventBus.$on('play-queue-item', this.playQueueItem)
     this.$eventBus.$on('play-item', this.playLibraryItem)
     this.$eventBus.$on('pause-item', this.pauseItem)
+    this.$eventBus.$on('player-get-time', this.providePlayerTime)
   },
   beforeDestroy() {
     this.$eventBus.$off('cast-session-active', this.castSessionActive)
@@ -577,6 +583,7 @@ export default {
     this.$eventBus.$off('play-queue-item', this.playQueueItem)
     this.$eventBus.$off('play-item', this.playLibraryItem)
     this.$eventBus.$off('pause-item', this.pauseItem)
+    this.$eventBus.$off('player-get-time', this.providePlayerTime)
   }
 }
 </script>
