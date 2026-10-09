@@ -1,0 +1,22 @@
+# Pinned direct dependencies of the transcription helper.
+# Tested on Windows 11, Python 3.12, NVIDIA RTX 5090 (Blackwell, compute capability 12.0), driver 610.88.
+# requirements.lock.txt has the full tested environment.
+
+faster-whisper==1.2.1
+# 4.6.3+ supports CUDA 12.8 / Blackwell (sm_120); INT8 is disabled on sm_120, so float16 is used
+ctranslate2==4.8.2
+# faster-whisper 1.2.1 passes metadata_errors to av.open(), which PyAV 19 removed
+av==18.1.0; python_version >= "3.11"
+av==17.1.0; python_version < "3.11"
+onnxruntime==1.31.0; python_version >= "3.11"
+onnxruntime==1.23.2; python_version < "3.11"
+
+# CUDA 12 libraries for CTranslate2 from NVIDIA's wheels (no system CUDA toolkit needed).
+# The Windows ctranslate2 wheel already bundles cuDNN 9; on Linux it comes from pip as well.
+nvidia-cublas-cu12==12.9.2.10
+nvidia-cudnn-cu12==9.27.0.42; sys_platform == "linux"
+
+fastapi==0.143.0
+uvicorn==0.54.0
+truststore==0.10.4
+tomli==2.5.0; python_version < "3.11"

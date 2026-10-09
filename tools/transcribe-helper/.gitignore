@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+.pytest_cache/
+cache/
+config.toml
+tests/fixtures/audio/
+*.part
