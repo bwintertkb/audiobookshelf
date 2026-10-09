@@ -45,12 +45,13 @@ def test_reads_paragraphs_in_spine_order_with_headings():
     ])
     book = read_epub(epub)
     assert book["title"] == "A Test Book"
+    # "spine" is the OPF spine position (the navigation document is position 0), like epub.js' Section.index
     assert book["paragraphs"] == [
-        {"text": "Chapter One", "heading": True},
-        {"text": "It was a bright cold day in April,", "heading": False},
-        {"text": "and the clocks were striking thirteen.", "heading": False},
-        {"text": "Chapter Two", "heading": True},
-        {"text": "Winston Smith slipped quickly through.", "heading": False},
+        {"text": "Chapter One", "heading": True, "spine": 1},
+        {"text": "It was a bright cold day in April,", "heading": False, "spine": 1},
+        {"text": "and the clocks were striking thirteen.", "heading": False, "spine": 1},
+        {"text": "Chapter Two", "heading": True, "spine": 2},
+        {"text": "Winston Smith slipped quickly through.", "heading": False, "spine": 2},
     ]
 
 

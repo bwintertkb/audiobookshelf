@@ -109,6 +109,9 @@ def test_ebook_job_transcribes_and_aligns_the_book_text(server, manager_factory)
     assert texts == ["The", "Happy", "Prince"] + STORY.split() + ["The", "Nightingale", "and", "the", "Rose"] + STORY_TWO.split()
     headings = [s for s in transcript["segments"] if s.get("heading")]
     assert [s["text"] for s in headings] == ["The Happy Prince", "The Nightingale and the Rose"]
+    # Each sentence knows its EPUB spine position (0 = nav document, 1 = front matter, 2 and 3 = the stories)
+    assert {s["spine"] for s in transcript["segments"] if "Happy Prince" in s["text"] or "weathercock" in s["text"]} == {2}
+    assert {s["spine"] for s in transcript["segments"] if "Nightingale" in s["text"] or "Student" in s["text"]} == {3}
     # Times are on the book timeline: the second story starts in the second file
     one, _ = durations()
     second_story = next(w for w in words_of(transcript) if w["w"] == "“She")

@@ -112,7 +112,8 @@ def extract_html_paragraphs(html):
 
 
 def read_epub(source):
-    """source: path or bytes. Returns {"title", "paragraphs": [{"text", "heading"}]} in reading (spine) order."""
+    """source: path or bytes. Returns {"title", "paragraphs": [{"text", "heading", "spine"}]} in reading (spine) order.
+    "spine" is the position of the content document in the OPF spine."""
     try:
         archive = zipfile.ZipFile(io.BytesIO(source) if isinstance(source, (bytes, bytearray)) else source)
     except (zipfile.BadZipFile, OSError) as error:
@@ -143,7 +144,8 @@ def read_epub(source):
             }
 
         paragraphs = []
-        for itemref in opf.findall(".//opf:spine/opf:itemref", OPF_NS):
+        # spine_index counts every itemref, like epub.js' Section.index, so readers can find the text again
+        for spine_index, itemref in enumerate(opf.findall(".//opf:spine/opf:itemref", OPF_NS)):
             if itemref.get("linear", "yes") == "no":
                 continue
             item = manifest.get(itemref.get("idref"))
@@ -151,7 +153,9 @@ def read_epub(source):
                 continue  # the EPUB 3 navigation document is a table of contents
             if item["type"] not in ("application/xhtml+xml", "text/html") or item["path"] not in names:
                 continue
-            paragraphs.extend(extract_html_paragraphs(_decode(archive.read(item["path"]))))
+            for paragraph in extract_html_paragraphs(_decode(archive.read(item["path"]))):
+                paragraph["spine"] = spine_index
+                paragraphs.append(paragraph)
 
     if not paragraphs:
         raise EbookError("No text found in the EPUB")

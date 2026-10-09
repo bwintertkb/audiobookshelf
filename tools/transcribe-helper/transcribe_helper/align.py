@@ -404,5 +404,8 @@ def _build_segments(paragraphs, book_words, starts, ends, keep):
                 segment["paragraph"] = True
             if heading:
                 segment["heading"] = True
+            if paragraphs[paragraph_index].get("spine") is not None:
+                # EPUB spine position of the sentence, so ebook readers can highlight it in the book itself
+                segment["spine"] = paragraphs[paragraph_index]["spine"]
             segments.append(segment)
     return segments
