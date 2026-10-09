@@ -243,11 +243,8 @@ export default {
     },
     playFromHere() {
       const startTime = this.readAlong?.firstVisibleWordTime() ?? 0
-      if (this.readAlong) {
-        // Highlight the new start first, so following does not turn back to the old narration page
-        this.readAlong.update(startTime, true)
-        this.readAlong.resumeFollowing()
-      }
+      // Highlight the new start first, so following does not turn back to the old narration page
+      this.readAlong?.startAt(startTime)
       if (this.isStreamingThisItem) {
         // Jump the open player to this page (e.g. after reading ahead of the audio) and play
         this.$eventBus.$emit('playback-seek', startTime)

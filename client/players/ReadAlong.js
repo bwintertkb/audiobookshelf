@@ -18,9 +18,15 @@ const NOTE_MARKER = /^[\s[(]*[\d*†‡§¶]+[\])\s]*$/
 const WHITESPACE = /\s/
 const EPUB_NS = 'http://www.idpf.org/2007/ops'
 const LOOKAHEAD_TOKENS = 4000
+const NAVIGATION_TIMEOUT_MS = 3000
 
 /** Range.START_TO_START */
 const START_TO_START = 0
+
+/** How long a position before a requested start is ignored (see update) */
+const START_SETTLE_MS = 5000
+/** Time epub.js gets to display the page again after a resize before following continues */
+const REDISPLAY_SETTLE_MS = 1000
 
 export const WORD_HIGHLIGHT = 'abs-readalong-word'
 export const SENTENCE_HIGHLIGHT = 'abs-readalong-sentence'
@@ -106,6 +112,14 @@ export default class ReadAlong {
     this.dirty = false
     this.lastTime = null
     this.followPending = false
+    this.listening = new WeakSet() // documents with event listeners
+    this.redisplayUntil = 0
+    // epub.js displays the page again after a resize (e.g. the player bar opened)
+    this.onResized = () => {
+      this.redisplayUntil = Date.now() + REDISPLAY_SETTLE_MS
+      this.dirty = true
+    }
+    rendition.on('resized', this.onResized)
 
     // Words of each spine section are contiguous in the transcript
     this.spineWords = new Map()
@@ -135,7 +149,10 @@ export default class ReadAlong {
     entry.view = view
     entry.contents = contents
     entry.window = contents.window
-    contents.document.addEventListener('click', (event) => this.onDocumentClick(section.index, event))
+    if (!this.listening.has(contents.document)) {
+      this.listening.add(contents.document)
+      contents.document.addEventListener('click', (event) => this.onDocumentClick(section.index, event))
+    }
     if (this.pendingSpine === section.index) this.pendingSpine = null
     // A (re-)rendered section has new nodes: highlight again on the next update, even if the time did not change
     this.dirty = true
@@ -194,13 +211,27 @@ export default class ReadAlong {
   wordRange(wordIndex) {
     if (wordIndex < 0) return null
     const spine = this.index.segments[this.index.wordSegment[wordIndex]].spine
+    const entry = this.sectionEntry(spine)
+    return entry ? { entry, spine, range: entry.ranges[wordIndex - entry.firstWord] || null } : { entry: null, spine, range: null }
+  }
+
+  /** Words of a rendered section, or null if the section is not rendered */
+  sectionEntry(spine) {
     let entry = this.sections.get(spine)
     if (entry && !this.isAttached(entry)) {
       // epub.js tore down this section's iframe (paged away from it): it has to be rendered again
       this.sections.delete(spine)
       entry = null
     }
-    return entry ? { entry, spine, range: entry.ranges[wordIndex - entry.firstWord] || null } : { entry: null, spine, range: null }
+    if (!entry && this.spineWords.has(spine)) {
+      // Rendered again without a "rendered" event (e.g. while resizing): map its new document
+      const view = (this.rendition.views()?.all?.() || []).find((v) => v.section?.index === spine && v.contents?.document?.defaultView)
+      if (view) {
+        this.onRendered(view.section, view)
+        entry = this.sections.get(spine) || null
+      }
+    }
+    return entry
   }
 
   isAttached(entry) {
@@ -210,6 +241,13 @@ export default class ReadAlong {
   // ------------------------------------------------------------------ playback sync
   /** Called every frame / timer tick with the current time on the book timeline */
   update(time, force = false) {
+    const target = this.startTarget
+    if (target) {
+      // Until playback gets there: seeks can land a little before the requested word (e.g. MP3 seeking) and a
+      // starting player reports 0 or the start of the file for a moment
+      if (Date.now() > target.until || time >= target.time) this.startTarget = null
+      else time = target.time
+    }
     if (force || this.dirty || time !== this.lastTime) {
       this.lastTime = time
       const { word, segment } = findPosition(this.index, time)
@@ -267,6 +305,8 @@ export default class ReadAlong {
   /** Turn to the page with the narrated word (or load its section) */
   follow() {
     if (this.navigating) return
+    // Do not race epub.js re-displaying the page after a resize with another display
+    if (Date.now() < this.redisplayUntil || !this.rendition.views()?.length) return
     const located = this.activeWord >= 0 ? this.wordRange(this.activeWord) : null
     if (!located) {
       this.followPending = false
@@ -296,11 +336,16 @@ export default class ReadAlong {
   }
 
   navigate(target) {
-    this.navigating = Promise.resolve(this.rendition.display(target))
+    // epub.js can leave a display() pending (e.g. started while the page was still snapping): retry after a while
+    let timeout
+    const settled = new Promise((resolve) => (timeout = setTimeout(resolve, NAVIGATION_TIMEOUT_MS)))
+    const navigation = Promise.race([Promise.resolve(this.rendition.display(target)), settled])
       .catch((error) => console.error('[ReadAlong] Failed to display', target, error))
       .finally(() => {
-        this.navigating = null
+        clearTimeout(timeout)
+        if (this.navigating === navigation) this.navigating = null
       })
+    this.navigating = navigation
   }
 
   isVisible(entry, range) {
@@ -314,6 +359,14 @@ export default class ReadAlong {
     const left = frame.left + rect.left
     const top = frame.top + rect.top
     return left >= area.left - 1 && left + rect.width <= area.right + 1 && top >= area.top - 1 && top + rect.height <= area.bottom + 1
+  }
+
+  /** Playback was asked to start at a time (play from here, a chosen word): show it and follow from there */
+  startAt(time) {
+    this.startTarget = null
+    this.update(time, true)
+    this.startTarget = { time, until: Date.now() + START_SETTLE_MS }
+    this.resumeFollowing()
   }
 
   /** The user turned pages: stop following until they ask to return */
@@ -338,10 +391,9 @@ export default class ReadAlong {
     if (!point) return
     const wordIndex = this.wordAtPoint(spine, point.node, point.offset)
     if (wordIndex < 0) return
-    this.following = true
-    this.followPending = true
-    this.onFollowChanged?.(true)
-    this.onSeek?.(this.index.wordStarts[wordIndex])
+    const time = this.index.wordStarts[wordIndex]
+    this.startAt(time)
+    this.onSeek?.(time)
   }
 
   caretFromPoint(doc, x, y) {
@@ -406,8 +458,8 @@ export default class ReadAlong {
 
   /** First narrated word at or after a position of a section, or the first narrated word of a later section */
   firstWordTimeFrom(spine, cfi) {
-    const entry = this.sections.get(spine)
-    if (entry && this.isAttached(entry) && cfi) {
+    const entry = this.sectionEntry(spine)
+    if (entry && cfi) {
       let start = null
       try {
         start = entry.contents.range(cfi)
@@ -441,6 +493,7 @@ export default class ReadAlong {
   }
 
   destroy() {
+    this.rendition.off('resized', this.onResized)
     if (this.highlightWindow) this.clearHighlights(this.highlightWindow)
     if (this.annotationCfi) this.rendition.annotations.remove(this.annotationCfi, 'highlight')
     this.sections.clear()
