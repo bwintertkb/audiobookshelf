@@ -10,7 +10,8 @@ import { buildHelperJobFiles, normalizeHelperUrl } from '@/players/transcriptUti
 const JOBS_STORAGE_KEY = 'transcriptJobs'
 const POLL_INTERVAL_MS = 1500
 const HEALTH_CACHE_MS = 10000
-const ACTIVE_STATUSES = ['submitting', 'downloading', 'queued', 'transcribing', 'uploading']
+const ACTIVE_STATUSES = ['submitting', 'downloading', 'queued', 'transcribing', 'aligning', 'uploading']
+const HELPER_STATUSES = ['downloading', 'queued', 'transcribing', 'aligning']
 
 let pollTimer = null
 let pollInFlight = false
@@ -137,13 +138,22 @@ export const actions = {
     }
     return state.helper.available
   },
-  async startJob({ state, commit, dispatch, getters, rootGetters }, { libraryItem, absBaseUrl }) {
+  /**
+   * @param {{ libraryItem: Object, absBaseUrl: string, mode?: 'whisper' | 'ebook' }} payload
+   * mode "ebook" uses the item's EPUB text, aligned to the audio (an existing Whisper transcript is reused if possible)
+   */
+  async startJob({ state, commit, dispatch, getters, rootGetters }, { libraryItem, absBaseUrl, mode = 'whisper' }) {
     const helperUrl = getters.getHelperUrl
     const libraryItemId = libraryItem.id
     const request = {
       absBaseUrl,
       libraryItemId,
-      files: buildHelperJobFiles(libraryItem, absBaseUrl)
+      files: buildHelperJobFiles(libraryItem, absBaseUrl),
+      mode
+    }
+    if (mode === 'ebook') {
+      request.ebookUrl = `${absBaseUrl}/api/items/${libraryItemId}/ebook`
+      if (libraryItem.hasTranscript) request.baseTranscriptUrl = `${absBaseUrl}/api/items/${libraryItemId}/transcript`
     }
     const title = libraryItem.media?.metadata?.title || ''
     commit('setJob', { libraryItemId, helperUrl, title, request, status: 'submitting', progress: 0, downloadProgress: 0 })
@@ -188,7 +198,7 @@ export const actions = {
     dispatch('pollJobs')
   },
   async pollJobs({ state, commit, dispatch }) {
-    const active = Object.entries(state.jobs).filter(([, job]) => job.jobId && ['downloading', 'queued', 'transcribing'].includes(job.status))
+    const active = Object.entries(state.jobs).filter(([, job]) => job.jobId && HELPER_STATUSES.includes(job.status))
     if (!active.length && !Object.values(state.jobs).some((job) => ACTIVE_STATUSES.includes(job.status))) {
       clearInterval(pollTimer)
       pollTimer = null

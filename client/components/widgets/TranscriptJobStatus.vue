@@ -52,6 +52,8 @@ export default {
           return this.$strings.LabelTranscriptStatusQueued
         case 'transcribing':
           return `${this.$strings.LabelTranscriptStatusTranscribing} ${this.progressPercent}%`
+        case 'aligning':
+          return this.$strings.LabelTranscriptStatusAligning
         case 'uploading':
           return this.$strings.LabelTranscriptStatusUploading
         case 'error':

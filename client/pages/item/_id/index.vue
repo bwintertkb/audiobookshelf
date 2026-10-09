@@ -379,6 +379,9 @@ export default {
       if (this.$store.getters['transcripts/getIsJobActive'](this.libraryItemId)) return false
       return this.$store.getters['transcripts/getCanCreateTranscripts']
     },
+    canCreateTranscriptFromEbook() {
+      return this.canCreateTranscript && this.ebookFile?.ebookFormat === 'epub'
+    },
     contextMenuItems() {
       const items = []
 
@@ -441,6 +444,13 @@ export default {
         items.push({
           text: this.hasTranscript ? this.$strings.ButtonRecreateTranscript : this.$strings.ButtonCreateTranscript,
           action: 'create-transcript'
+        })
+      }
+
+      if (this.canCreateTranscriptFromEbook) {
+        items.push({
+          text: this.$strings.ButtonCreateTranscriptFromEbook,
+          action: 'create-transcript-ebook'
         })
       }
 
@@ -805,27 +815,29 @@ export default {
         this.$store.commit('setSelectedLibraryItem', this.libraryItem)
         this.$store.commit('globals/setShareModal', this.mediaItemShare)
       } else if (action === 'create-transcript') {
-        this.createTranscriptClick()
+        this.createTranscriptClick('whisper')
+      } else if (action === 'create-transcript-ebook') {
+        this.createTranscriptClick('ebook')
       } else if (action === 'delete-transcript') {
         this.deleteTranscriptClick()
       }
     },
-    createTranscriptClick() {
-      if (!this.hasTranscript) return this.startTranscriptJob()
+    createTranscriptClick(mode) {
+      if (!this.hasTranscript) return this.startTranscriptJob(mode)
       const payload = {
         message: this.$strings.MessageConfirmRecreateTranscript,
         callback: (confirmed) => {
-          if (confirmed) this.startTranscriptJob()
+          if (confirmed) this.startTranscriptJob(mode)
         },
         type: 'yesNo'
       }
       this.$store.commit('globals/setConfirmPrompt', payload)
     },
-    async startTranscriptJob() {
+    async startTranscriptJob(mode) {
       // The helper downloads audio from the same server address the browser uses
       const absBaseUrl = process.env.NODE_ENV === 'development' ? process.env.serverUrl : `${window.location.origin}${this.$config.routerBasePath}`
       try {
-        await this.$store.dispatch('transcripts/startJob', { libraryItem: this.libraryItem, absBaseUrl })
+        await this.$store.dispatch('transcripts/startJob', { libraryItem: this.libraryItem, absBaseUrl, mode })
       } catch (error) {
         console.error('Failed to start transcript job', error)
         this.$toast.error(error.message)
