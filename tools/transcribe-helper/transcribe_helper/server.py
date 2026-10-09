@@ -1,7 +1,7 @@
 """HTTP API of the transcription helper (bound to 127.0.0.1 only).
 
 GET    /health             version, GPU, model, busy/idle
-POST   /jobs               start a job -> {jobId}
+POST   /jobs               start a job -> {jobId} (mode "whisper", or "ebook" to align the item's EPUB)
 GET    /jobs               list jobs (status only)
 GET    /jobs/{id}          job status
 GET    /jobs/{id}/result   v1 transcript JSON once done
@@ -44,6 +44,11 @@ class JobRequest(BaseModel):
     language: Optional[str] = Field(default=None, max_length=16)
     beamSize: Optional[int] = Field(default=None, ge=1, le=10)
     force: bool = False
+    # "ebook": align the item's EPUB text with the audio instead of using Whisper's text
+    mode: str = Field(default="whisper", pattern="^(whisper|ebook)$")
+    ebookUrl: Optional[str] = Field(default=None, max_length=2048)
+    # Existing Whisper transcript of the item; reused in ebook mode when made from the same audio files
+    baseTranscriptUrl: Optional[str] = Field(default=None, max_length=2048)
 
 
 class LocalAccessMiddleware:

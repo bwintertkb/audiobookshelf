@@ -145,7 +145,8 @@ def sanity_check(transcript, files=None):
         if seg["end"] < seg["start"]:
             problems.append(f"segment {i} ends before it starts")
         prev_seg_start = seg["start"]
-        if ranges:
+        # Book sentences (source "ebook") may legitimately continue across files
+        if ranges and transcript.get("source") != "ebook":
             start_file = file_index_for(seg["start"])
             end_file = file_index_for(seg["end"])
             if start_file is None or end_file is None:

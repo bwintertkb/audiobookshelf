@@ -18,8 +18,9 @@ FIXTURE_AUDIO = Path(__file__).resolve().parent / "fixtures" / "audio"
 class FakeAbsServer:
     """Serves /audiobookshelf/api/items/<item>/file/<ino> like ABS, requiring a Bearer token."""
 
-    def __init__(self, files):
-        self.files = files  # {ino: bytes}
+    def __init__(self, files, headers=None):
+        self.files = files  # {last path segment (ino, "ebook", "transcript"): bytes}
+        self.headers = headers or {}  # {last path segment: {header: value}}
         self.requests = []
         manager = self
 
@@ -38,6 +39,8 @@ class FakeAbsServer:
                 body = manager.files[ino]
                 self.send_response(200)
                 self.send_header("Content-Length", str(len(body)))
+                for name, value in manager.headers.get(ino, {}).items():
+                    self.send_header(name, value)
                 self.end_headers()
                 self.wfile.write(body)
 

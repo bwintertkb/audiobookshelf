@@ -1,13 +1,17 @@
 """Job queue: download audio from ABS, transcribe on the GPU one job at a time, merge into a v1 transcript.
 
-Lifecycle: downloading -> queued -> transcribing -> done | error | cancelled
+Lifecycle: downloading -> queued -> transcribing [-> aligning] -> done | error | cancelled
 - Audio is downloaded as soon as a job is submitted (ABS access tokens expire after ~1 hour), then the
   token is dropped from memory. Jobs wait for the single GPU worker in the "queued" state.
 - Per-file results are cached on disk keyed by (library item, file, model, requested language), so a
   cancelled or failed job that is submitted again skips files that were already transcribed. The cache
   for an item is cleared once a job for it completes.
+- Ebook mode ("mode": "ebook") aligns the book's EPUB text with the Whisper words. If the item already
+  has a Whisper transcript made from the same audio files ("baseTranscriptUrl"), it is reused and no
+  audio is downloaded or transcribed.
 """
 
+import gzip
 import hashlib
 import json
 import logging
@@ -25,6 +29,8 @@ from collections import OrderedDict
 from pathlib import Path, PurePosixPath
 
 from . import __version__
+from .align import EbookAlignmentError, align_ebook
+from .ebook import EbookError, read_epub
 from .transcriber import TranscriptionCancelled
 from .transcript import build_transcript, coverage_summary, merge_file_results, sanity_check
 
@@ -32,6 +38,8 @@ logger = logging.getLogger(__name__)
 
 TERMINAL_STATUSES = ("done", "error", "cancelled")
 DOWNLOAD_CHUNK = 1 << 16
+MAX_EBOOK_BYTES = 200 * 1024 * 1024
+MAX_TRANSCRIPT_BYTES = 256 * 1024 * 1024
 
 
 class JobError(Exception):
@@ -81,6 +89,11 @@ class Job:
         self.language = request.get("language") or None
         self.beam_size = request.get("beamSize")
         self.force = bool(request.get("force"))
+        self.mode = request.get("mode") or "whisper"
+        self.ebook_url = request.get("ebookUrl")
+        self.base_transcript_url = request.get("baseTranscriptUrl")
+        self.ebook = None
+        self.alignment = None
         self.status = "downloading"
         self.progress = 0.0
         self.download_progress = 0.0
@@ -111,6 +124,7 @@ class Job:
         return {
             "id": self.id,
             "libraryItemId": self.library_item_id,
+            "mode": self.mode,
             "status": self.status,
             "progress": round(self.progress, 4),
             "downloadProgress": round(self.download_progress, 4),
@@ -125,6 +139,7 @@ class Job:
             "warnings": self.warnings[:20],
             "realtimeFactor": self.realtime_factor,
             "summary": self.summary,
+            "alignment": self.alignment,
             "createdAt": _iso(self.created_at),
             "startedAt": _iso(self.started_at),
             "finishedAt": _iso(self.finished_at),
@@ -243,6 +258,14 @@ class JobManager:
                 raise JobError("invalid_request", "every file url must be on absBaseUrl")
             if not f.get("url") and not self._map_local_path(f.get("path")):
                 raise JobError("invalid_request", f"file {f.get('filename') or f.get('ino')} has no url and no mapped local path")
+        mode = request.get("mode") or "whisper"
+        if mode not in ("whisper", "ebook"):
+            raise JobError("invalid_request", f"Unknown mode '{mode}'")
+        if mode == "ebook" and not request.get("ebookUrl"):
+            raise JobError("invalid_request", "ebookUrl is required in ebook mode")
+        for key in ("ebookUrl", "baseTranscriptUrl"):
+            if request.get(key) and not request[key].startswith(base_prefix):
+                raise JobError("invalid_request", f"{key} must be on absBaseUrl")
 
     def _map_local_path(self, server_path):
         """Translate a path as seen by the ABS server to a local file through configured path mappings.
@@ -296,6 +319,24 @@ class JobManager:
     # ------------------------------------------------------------------ download phase
     def _prepare_job(self, job):
         try:
+            if job.mode == "ebook":
+                data = self._fetch_bytes(job, job.ebook_url, "the ebook", MAX_EBOOK_BYTES)
+                try:
+                    job.ebook = read_epub(data)
+                except EbookError as error:
+                    raise JobError("ebook_unsupported", f"{error}. Only EPUB ebooks are supported.") from None
+                base = self._load_base_transcript(job)
+                if base is not None:
+                    # The audio was transcribed before: align against that, no audio download or GPU needed
+                    job._token = None
+                    with self._lock:
+                        if job.is_terminal:
+                            return
+                        job.status = "aligning"
+                        job.started_at = _now()
+                    self._complete(job, base, reused_base=True)
+                    return
+
             for f in job.files:
                 f["_cached"] = None if job.force else self._load_cached_result(job, f)
             job.cached_files = sum(1 for f in job.files if f["_cached"] is not None)
@@ -338,20 +379,12 @@ class JobManager:
             job.status = "queued"
         self._gpu_queue.put(job)
 
-    def _download(self, job, f, on_progress):
+    def _open(self, job, url, name):
         if not job._token:
-            raise JobError("auth_required", "No ABS token was provided to download audio")
-        url = f["url"]
-        suffix = Path(f.get("filename") or "").suffix or Path(urllib.parse.urlsplit(url).path).suffix or ".audio"
-        directory = self.downloads_dir / _safe_name(job.library_item_id)
-        directory.mkdir(parents=True, exist_ok=True)
-        target = directory / f"{_safe_name(f.get('ino') or uuid.uuid4().hex)}{suffix}"
-        tmp = target.with_name(target.name + ".part")
-        name = f.get("filename") or f.get("ino") or "audio file"
-
+            raise JobError("auth_required", "No ABS token was provided to download from the server")
         request = urllib.request.Request(url, headers={"Authorization": f"Bearer {job._token}", "User-Agent": f"abs-transcribe-helper/{__version__}"})
         try:
-            response = _opener.open(request, timeout=60)
+            return _opener.open(request, timeout=60)
         except urllib.error.HTTPError as error:
             if error.code == 401:
                 raise JobError("auth_expired", "The ABS server rejected the access token (HTTP 401). It has probably expired; start the job again.") from None
@@ -362,6 +395,48 @@ class JobManager:
             raise JobError("download_failed", f"Downloading {name} failed with HTTP {error.code}") from None
         except urllib.error.URLError as error:
             raise JobError("download_failed", f"Could not reach the ABS server: {error.reason}") from None
+
+    def _fetch_bytes(self, job, url, name, limit):
+        with self._open(job, url, name) as response:
+            data = response.read(limit + 1)
+            if len(data) > limit:
+                raise JobError("download_failed", f"{name} is too large")
+            if response.headers.get("Content-Encoding", "").lower() == "gzip":
+                data = gzip.decompress(data)
+        return data
+
+    def _load_base_transcript(self, job):
+        """The item's existing Whisper transcript, if it was made from exactly these audio files."""
+        if not job.base_transcript_url or job.force:
+            return None
+        try:
+            base = json.loads(self._fetch_bytes(job, job.base_transcript_url, "the existing transcript", MAX_TRANSCRIPT_BYTES))
+        except JobError as error:
+            if error.code == "not_found":
+                return None
+            raise
+        except ValueError:
+            return None
+        files = base.get("files") or []
+        if base.get("version") != 1 or base.get("source") != "whisper" or len(files) != len(job.files):
+            return None
+        for existing, current in zip(files, job.files):
+            if existing.get("ino") and current.get("ino") and existing["ino"] != current["ino"]:
+                return None
+            if abs(float(existing.get("duration") or 0) - float(current["duration"])) > 0.05:
+                return None
+        logger.info("Job %s: reusing the existing Whisper transcript, no transcription needed", job.id)
+        return base
+
+    def _download(self, job, f, on_progress):
+        url = f["url"]
+        suffix = Path(f.get("filename") or "").suffix or Path(urllib.parse.urlsplit(url).path).suffix or ".audio"
+        directory = self.downloads_dir / _safe_name(job.library_item_id)
+        directory.mkdir(parents=True, exist_ok=True)
+        target = directory / f"{_safe_name(f.get('ino') or uuid.uuid4().hex)}{suffix}"
+        tmp = target.with_name(target.name + ".part")
+        name = f.get("filename") or f.get("ino") or "audio file"
+        response = self._open(job, url, name)
 
         try:
             length = int(response.headers.get("Content-Length") or 0)
@@ -471,12 +546,41 @@ class JobManager:
 
             segments = merge_file_results(results, job.files)
             transcript = build_transcript(segments, job.files, job.library_item_id, job.model, language)
-            job.warnings = sanity_check(transcript)
-            for warning in job.warnings[:20]:
-                logger.warning("Job %s sanity check: %s", job.id, warning)
             elapsed = time.perf_counter() - t0
             job.realtime_factor = round(elapsed / processed_this_run, 4) if processed_this_run else None
             job.detected_language = language
+        except TranscriptionCancelled:
+            self._finish(job, "cancelled")
+            return
+        except JobError as error:
+            self._finish(job, "error", error.code, str(error))
+            return
+        except Exception as error:
+            logger.exception("Job %s failed", job.id)
+            self._finish(job, "error", "transcription_failed", str(error))
+            return
+        self._complete(job, transcript)
+
+    def _complete(self, job, transcript, reused_base=False):
+        """Final step for a Whisper transcript: align it with the ebook in ebook mode, then finish."""
+        try:
+            if job.mode == "ebook":
+                with self._lock:
+                    if job.is_terminal:
+                        return
+                    job.status = "aligning"
+                t0 = time.perf_counter()
+                try:
+                    transcript = align_ebook(transcript, job.ebook)
+                except EbookAlignmentError as error:
+                    raise JobError("ebook_mismatch", str(error)) from None
+                transcript["libraryItemId"] = job.library_item_id
+                job.alignment = transcript.get("alignment")
+                logger.info("Job %s: aligned the ebook in %.1fs (%s)", job.id, time.perf_counter() - t0, job.alignment)
+            job.warnings = sanity_check(transcript)
+            for warning in job.warnings[:20]:
+                logger.warning("Job %s sanity check: %s", job.id, warning)
+            job.detected_language = job.detected_language or transcript.get("language")
             job.summary = coverage_summary(transcript)
             job.result = transcript
             job.progress = 1.0
@@ -484,13 +588,12 @@ class JobManager:
             # Completed: per-file cache no longer needed (re-creating should transcribe again)
             shutil.rmtree(self._item_results_dir(job), ignore_errors=True)
             self._finish(job, "done")
-        except TranscriptionCancelled:
-            self._finish(job, "cancelled")
         except JobError as error:
+            # Per-file results stay cached, so retrying (e.g. with the right ebook) skips transcription
             self._finish(job, "error", error.code, str(error))
         except Exception as error:
             logger.exception("Job %s failed", job.id)
-            self._finish(job, "error", "transcription_failed", str(error))
+            self._finish(job, "error", "alignment_failed" if job.mode == "ebook" else "transcription_failed", str(error))
 
     # ------------------------------------------------------------------ helpers
     def _finish(self, job, status, error_code=None, error=None):
