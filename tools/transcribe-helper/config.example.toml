@@ -1,0 +1,35 @@
+# Copy to config.toml (next to run_helper.py) and adjust. Every setting is optional.
+# Environment variables override this file (see transcribe_helper/config.py).
+
+# The helper always binds to 127.0.0.1; only the port is configurable.
+port = 8765
+
+# Origins (scheme://host[:port], no path) of the ABS web pages allowed to call the helper.
+# Add the address you open ABS at in your browser, e.g. "https://abs.example.com" or "http://192.168.1.10:13378".
+allowed_origins = [
+  "http://localhost:3333",
+  "http://127.0.0.1:3333",
+  "http://localhost:3000",
+  "http://127.0.0.1:3000",
+]
+
+# Default Whisper model. large-v3-turbo is fast and accurate; large-v3 is slower and slightly better.
+model = "large-v3-turbo"
+# Models a job may request
+# allowed_models = ["tiny", "base", "small", "medium", "large-v3", "large-v3-turbo"]
+
+device = "cuda"          # "cpu" works too, but is very slow
+# compute_type = "float16" # default: float16 on cuda, int8 on cpu
+beam_size = 5
+# batch_size = 0         # >1 enables faster-whisper's batched pipeline (faster, no condition_on_previous_text)
+
+# model_dir = ""         # where models are downloaded (default: Hugging Face cache in your home folder)
+cache_dir = "cache"      # downloaded audio and per-file results (relative to this file)
+keep_downloads = false   # keep downloaded audio after a job finishes
+job_retention_hours = 24 # finished jobs (and their results) are forgotten after this
+
+# If your ABS library folder is also reachable from this PC (e.g. a NAS share), map the path as the
+# ABS server sees it to the local path. Mapped files are read directly instead of downloaded.
+# [[path_mappings]]
+# remote = "/audiobooks"
+# local = "Z:\\audiobooks"
