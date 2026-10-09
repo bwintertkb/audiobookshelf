@@ -264,6 +264,35 @@ describe('<TranscriptPanel />', () => {
     })
   })
 
+  it('shows ebook transcripts with the book headings and paragraphs instead of chapter markers', () => {
+    const words = (text, start) => text.split(' ').map((w, i) => ({ w, start: start + i * 0.4, end: start + i * 0.4 + 0.3 }))
+    const segment = (text, start, flags = {}) => {
+      const ws = words(text, start)
+      return { start, end: ws[ws.length - 1].end, text, words: ws, ...flags }
+    }
+    const transcript = {
+      version: 1,
+      libraryItemId: 'ebook-book',
+      source: 'ebook',
+      files: [{ ino: 'f1', startOffset: 0, duration: 100 }],
+      segments: [segment('The Selfish Giant.', 10, { heading: true, paragraph: true }), segment('Every afternoon, as they were coming from school, the children used to go and play in the Giant’s garden.', 12, { paragraph: true }), segment('It was a large lovely garden, with soft green grass.', 20), segment('“How happy we are here!” they cried to each other.', 30, { paragraph: true })]
+    }
+    const libraryItem = { id: 'ebook-book', hasTranscript: true, updatedAt: 1, media: { tracks: [{ ino: 'f1', startOffset: 0, duration: 100 }] } }
+    const mocks = {
+      $axios: { $get: cy.stub().resolves(transcript) },
+      $store: { getters: { 'user/getUserSetting': () => null }, dispatch: cy.stub() },
+      $strings: Strings,
+      $getString: (key) => Strings[key]
+    }
+    const chapters = [{ id: 0, start: 0, end: 100, title: 'Chapter 1' }]
+    cy.mount(TranscriptPanel, { propsData: { libraryItem, chapters, getCurrentTime: () => 21, playing: false }, mocks, stubs: { 'ui-tooltip': Tooltip, 'widgets-loading-spinner': LoadingSpinner } })
+    cy.get('#transcript-panel .transcript-segment-heading').should('have.text', 'The Selfish Giant. ')
+    cy.get('#transcript-panel h3').should('not.exist') // no duplicate "Chapter 1" marker
+    cy.get('#transcript-panel .transcript-row-paragraph').should('have.length', 3)
+    cy.get('#transcript-panel .transcript-word-active').should('have.text', 'a') // "a" starts at 20.8 s, "large" at 21.2 s
+    cy.get('#transcript-panel .transcript-word').contains('Giant’s').should('exist')
+  })
+
   it('shows a message when the transcript is missing', () => {
     const mocks = {
       $axios: { $get: cy.stub().rejects({ response: { status: 404 } }) },

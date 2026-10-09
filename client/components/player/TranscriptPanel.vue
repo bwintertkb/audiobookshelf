@@ -46,9 +46,9 @@
       <div v-show="!loading && !error" ref="scroller" class="transcript-scroller absolute inset-0 overflow-y-auto overflow-x-hidden outline-hidden" tabindex="0" @scroll.passive="onScroll" @wheel.passive="stopAutoScroll" @touchstart.passive="stopAutoScroll" @mousedown="onScrollerMousedown" @keydown="onScrollerKeydown" @click="onClick">
         <div class="relative" :style="{ height: totalHeight + 'px' }">
           <div ref="window" class="absolute left-0 right-0 top-0 px-4" :style="{ transform: `translateY(${windowTop}px)`, fontSize: fontSizePx + 'px' }">
-            <div v-for="row in visibleRows" :key="row.key" :data-row="row.index" class="transcript-row">
+            <div v-for="row in visibleRows" :key="row.key" :data-row="row.index" class="transcript-row" :class="{ 'transcript-row-paragraph': row.paragraph }">
               <h3 v-if="row.type === 'chapter'" class="transcript-chapter" :data-chapter-start="row.start">{{ row.title }}</h3>
-              <p v-else class="transcript-segment" :class="{ 'transcript-search-current': row.segment === currentSearchSegment }" :data-seg="row.segment">
+              <p v-else class="transcript-segment" :class="{ 'transcript-search-current': row.segment === currentSearchSegment, 'transcript-segment-heading': row.heading }" :data-seg="row.segment">
                 <template v-for="word in row.words"
                   ><span :key="word.i" class="transcript-word" :class="{ 'transcript-search-hit': word.hit }" :data-wi="word.i">{{ word.w }}</span
                   >{{ ' ' }}</template
@@ -171,7 +171,7 @@ export default {
               hit: tokens.length > 0 && tokens.some((token) => word.w.toLowerCase().includes(token))
             }))
           : [{ i: -1, w: segment.text, hit: false }]
-        rows.push({ key: `r${r}`, index: r, type: 'segment', segment: row.segment, words })
+        rows.push({ key: `r${r}`, index: r, type: 'segment', segment: row.segment, words, heading: !!segment.heading, paragraph: !!segment.paragraph })
       }
       return rows
     }
@@ -215,7 +215,8 @@ export default {
       this.transcript = transcript
       this.heights = null
       this.offsets = null
-      this.index = buildTranscriptIndex(transcript, this.chapters)
+      // Ebook transcripts carry the book's own headings, so the item's chapter markers would be duplicates
+      this.index = buildTranscriptIndex(transcript, transcript.source === 'ebook' ? [] : this.chapters)
       this.audioMismatch = !!getTranscriptAudioMismatch(transcript, this.libraryItem.media?.tracks)
       this.activeWord = -1
       this.activeSegment = -1
@@ -543,6 +544,10 @@ export default {
 .transcript-row {
   padding: 5px 0;
 }
+/* Ebook transcripts: segments are sentences; extra space where a new paragraph of the book starts */
+.transcript-row-paragraph {
+  padding-top: 0.9em;
+}
 .transcript-chapter {
   font-size: 1.15em;
   font-weight: 600;
@@ -565,6 +570,11 @@ export default {
 .transcript-segment-active {
   color: rgb(243 244 246);
   border-left-color: var(--color-accent);
+}
+.transcript-segment-heading {
+  font-size: 1.15em;
+  font-weight: 600;
+  color: rgb(229 231 235);
 }
 .transcript-word {
   cursor: pointer;
