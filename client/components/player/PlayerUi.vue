@@ -30,6 +30,12 @@
           </button>
         </ui-tooltip>
 
+        <ui-tooltip v-if="hasTranscript" direction="top" :text="$strings.LabelViewTranscript">
+          <button :aria-label="$strings.LabelViewTranscript" :aria-pressed="transcriptOpen" class="mx-1 lg:mx-2" :class="transcriptOpen ? 'text-white' : 'text-gray-300 hover:text-white'" @mousedown.prevent @mouseup.prevent @click.stop="$emit('toggleTranscript')">
+            <span class="material-symbols text-2xl" :class="{ fill: transcriptOpen }">subtitles</span>
+          </button>
+        </ui-tooltip>
+
         <ui-tooltip v-if="playerQueueItems.length" direction="top" :text="$strings.LabelViewQueue">
           <button :aria-label="$strings.LabelViewQueue" class="outline-hidden text-gray-300 mx-1 lg:mx-2 hover:text-white" @mousedown.prevent @mouseup.prevent @click.stop="$emit('showPlayerQueueItems')">
             <span class="material-symbols text-2.5xl sm:text-3xl">playlist_play</span>
@@ -89,7 +95,9 @@ export default {
     isPodcast: Boolean,
     hideBookmarks: Boolean,
     hideSleepTimer: Boolean,
-    hasNextItemInQueue: Boolean
+    hasNextItemInQueue: Boolean,
+    hasTranscript: Boolean,
+    transcriptOpen: Boolean
   },
   data() {
     return {
