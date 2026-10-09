@@ -54,9 +54,18 @@ With a transcript made from the ebook, open the book with **Read** while the aud
 - The narrated sentence and word are highlighted in the book itself, with the book's formatting (fonts, italics, images, the reader's themes and font settings), at every playback speed. The player stays at the bottom of the screen with its speed control.
 - Pages turn by themselves to follow the narration. Turn a page yourself to look around and use **Return to narration** to follow the audio again.
 - Tap a word to play from there.
-- When the audiobook is not playing, **Play from here** starts it at the first word of the page you are reading.
+- **Play from here** starts the audiobook at the first narrated word of the page you are reading. It shows when the audiobook is not playing, and while it plays when you are on another page than the narration (for example after reading ahead): then it moves the narration to your page.
 
 This uses the [CSS Custom Highlight API](https://developer.mozilla.org/en-US/docs/Web/API/CSS_Custom_Highlight_API) (Chrome/Edge 105+, Safari 17.2+, Firefox 140+); older browsers highlight the sentence only.
+
+## Android app
+
+The `feature/transcripts` branch of the Audiobookshelf app (`audiobookshelf-app`) shows transcripts too; see `docs/read-along.md` there for building and installing it. It needs a server running this version.
+
+- **Player**: in the full-screen player, the transcript button (next to the chapters button) shows the transcript instead of the cover, with the same highlighting, scrolling, search, text size and tap-to-jump as the web player.
+- **Ebook reader**: with a transcript made from the ebook, **Read** the book while it plays to see the narrated sentence and word highlighted in the book, with the reader's own formatting and settings. Pages turn with the narration; swiping turns pages yourself and **Return to narration** follows the audio again. **Long-press** a word to play from there (a tap still shows the reader toolbar). **Play from here** starts the audiobook at the page you are reading, also while it plays after you read ahead of the narration. The speed button in the reader's bottom bar changes the playback speed without leaving the book.
+- **Offline**: downloading a book also downloads its transcript (and the ebook, as before). For a book downloaded before it had an ebook or transcript, or to update the transcript after re-creating it, choose **Download ebook and transcript** in the book's **⋮** menu: only those files are added to the downloaded book. A downloaded transcript is used even when the server cannot be reached.
+- Creating transcripts is done in the web client (the GPU helper runs on your PC).
 
 ## Permissions
 
@@ -152,7 +161,7 @@ Ebook transcripts (`"source": "ebook"`) use the same structure, with optional ex
 
 ## Limitations
 
-- Web client only (the Vue client in `client/`); the mobile apps do not show transcripts yet.
+- Web client and the Android app built from the `feature/transcripts` branch of `audiobookshelf-app`; the official app builds and iOS do not show transcripts.
 - Books only (no podcast episodes).
 - Creating transcripts needs the helper on the same PC as the browser; Safari cannot reach it from an HTTPS page.
 - When the browser cannot play the files directly and ABS streams a transcoded HLS version, timing can drift slightly for VBR MP3 files without a duration header (ABS chapter markers have the same drift).
