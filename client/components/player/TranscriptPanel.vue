@@ -20,7 +20,16 @@
     </div>
 
     <div v-if="showSearch" class="flex items-center px-3 py-1.5 border-b border-black-200 shrink-0">
-      <input ref="searchInput" v-model="searchQuery" type="search" class="grow min-w-0 bg-primary border border-gray-600 rounded-sm px-2 py-1 text-sm text-gray-100 outline-hidden focus:border-gray-400" :placeholder="$strings.LabelTranscriptSearch" :aria-label="$strings.LabelTranscriptSearch" @keydown.enter.prevent="goToSearchResult($event.shiftKey ? -1 : 1)" @keydown.esc.stop.prevent="toggleSearch" />
+      <input
+        ref="searchInput"
+        v-model="searchQuery"
+        type="search"
+        class="grow min-w-0 bg-primary border border-gray-600 rounded-sm px-2 py-1 text-sm text-gray-100 outline-hidden focus:border-gray-400"
+        :placeholder="$strings.LabelTranscriptSearch"
+        :aria-label="$strings.LabelTranscriptSearch"
+        @keydown.enter.prevent="goToSearchResult($event.shiftKey ? -1 : 1)"
+        @keydown.esc.stop.prevent="toggleSearch"
+      />
       <p class="text-xs text-gray-300 px-2 whitespace-nowrap">{{ searchStatusText }}</p>
       <button class="transcript-icon-btn" :disabled="!searchResults.length" :aria-label="$strings.ButtonPrevious" @click="goToSearchResult(-1)"><span class="material-symbols text-xl">keyboard_arrow_up</span></button>
       <button class="transcript-icon-btn" :disabled="!searchResults.length" :aria-label="$strings.ButtonNext" @click="goToSearchResult(1)"><span class="material-symbols text-xl">keyboard_arrow_down</span></button>
@@ -40,16 +49,17 @@
             <div v-for="row in visibleRows" :key="row.key" :data-row="row.index" class="transcript-row">
               <h3 v-if="row.type === 'chapter'" class="transcript-chapter" :data-chapter-start="row.start">{{ row.title }}</h3>
               <p v-else class="transcript-segment" :class="{ 'transcript-search-current': row.segment === currentSearchSegment }" :data-seg="row.segment">
-                <template v-for="word in row.words"><span :key="word.i" class="transcript-word" :class="{ 'transcript-search-hit': word.hit }" :data-wi="word.i">{{ word.w }}</span>{{ ' ' }}</template>
+                <template v-for="word in row.words"
+                  ><span :key="word.i" class="transcript-word" :class="{ 'transcript-search-hit': word.hit }" :data-wi="word.i">{{ word.w }}</span
+                  >{{ ' ' }}</template
+                >
               </p>
             </div>
           </div>
         </div>
       </div>
 
-      <button v-if="!autoScroll && !loading && !error" class="absolute bottom-3 left-1/2 -translate-x-1/2 bg-primary border border-gray-600 hover:border-gray-400 shadow-lg rounded-full px-3 py-1 text-sm flex items-center whitespace-nowrap" @click="returnToCurrentPosition">
-        <span class="material-symbols text-lg pr-1">my_location</span>{{ $strings.ButtonReturnToCurrentPosition }}
-      </button>
+      <button v-if="!autoScroll && !loading && !error" class="absolute bottom-3 left-1/2 -translate-x-1/2 bg-primary border border-gray-600 hover:border-gray-400 shadow-lg rounded-full px-3 py-1 text-sm flex items-center whitespace-nowrap" @click="returnToCurrentPosition"><span class="material-symbols text-lg pr-1">my_location</span>{{ $strings.ButtonReturnToCurrentPosition }}</button>
     </div>
   </div>
 </template>

@@ -71,7 +71,12 @@ describe('transcriptUtils', () => {
     })
 
     it('handles segments without word timestamps', () => {
-      const textOnly = buildTranscriptIndex({ segments: [{ start: 1, end: 2, text: 'intro', words: [] }, { start: 5, end: 6, text: 'more', words: [] }] })
+      const textOnly = buildTranscriptIndex({
+        segments: [
+          { start: 1, end: 2, text: 'intro', words: [] },
+          { start: 5, end: 6, text: 'more', words: [] }
+        ]
+      })
       expect(findPosition(textOnly, 0.5)).to.deep.equal({ word: -1, segment: -1 })
       expect(findPosition(textOnly, 5.5)).to.deep.equal({ word: -1, segment: 1 })
     })

@@ -87,7 +87,10 @@ function mountPanel({ libraryItemId = 'book-1', time = 0, playing = true, librar
   const stubs = { 'ui-tooltip': Tooltip, 'widgets-loading-spinner': LoadingSpinner }
   const propsData = { libraryItem: libraryItem || book.libraryItem, chapters: book.chapters, getCurrentTime: () => clock.getCurrentTime(), playing }
   return cy.mount(TranscriptPanel, { propsData, mocks, stubs }).then(({ wrapper }) => {
-    return cy.get('#transcript-panel [data-wi]', { timeout: 20000 }).should('exist').then(() => ({ wrapper, vm: wrapper.vm, clock, book, axiosGet }))
+    return cy
+      .get('#transcript-panel [data-wi]', { timeout: 20000 })
+      .should('exist')
+      .then(() => ({ wrapper, vm: wrapper.vm, clock, book, axiosGet }))
   })
 }
 
@@ -221,9 +224,11 @@ describe('<TranscriptPanel />', () => {
       cy.get('button[aria-label="Search"]').click()
       cy.get('input[type="search"]').type('marker123x')
       cy.contains('1 of 1').should('exist')
-      cy.get('.transcript-search-hit').should('contain.text', 'marker123x').and(($el) => {
-        expect(isInside($el[0], vm.$refs.scroller)).to.be.true
-      })
+      cy.get('.transcript-search-hit')
+        .should('contain.text', 'marker123x')
+        .and(($el) => {
+          expect(isInside($el[0], vm.$refs.scroller)).to.be.true
+        })
       cy.contains('button', Strings.ButtonReturnToCurrentPosition).should('be.visible')
       cy.get('input[type="search"]').clear().type('nonexistentword')
       cy.contains(Strings.MessageNoResults).should('exist')
