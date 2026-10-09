@@ -5,3 +5,4 @@ cache/
 config.toml
 tests/fixtures/audio/
 *.part
+tests/fixtures/ebooks/

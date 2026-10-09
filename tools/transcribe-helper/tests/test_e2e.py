@@ -76,3 +76,54 @@ def test_transcribes_multi_file_book(transcriber, make_config):
     finally:
         manager.stop()
         server.close()
+
+
+EBOOK_AUDIO = FIXTURE_AUDIO / "happyprince" / "happyprince_03_oscarwilde_64kb.mp3"
+EBOOK = FIXTURE_AUDIO.parent / "ebooks" / "happy-prince-pg902.epub"
+
+
+@pytest.mark.skipif(not (EBOOK_AUDIO.is_file() and EBOOK.is_file()), reason="ebook sample missing: run python scripts/fetch_sample.py --ebook-sample")
+def test_aligns_a_real_epub_with_a_real_recording(transcriber, make_config):
+    """LibriVox recording of "The Selfish Giant" against the full Project Gutenberg EPUB of the book."""
+    from transcribe_helper.ebook import read_epub
+
+    server = FakeAbsServer({"ino3": EBOOK_AUDIO.read_bytes(), "ebook": EBOOK.read_bytes()})
+    manager = JobManager(make_config(model=MODEL), lambda model: transcriber, gpu_info={"available": True})
+    manager.start()
+    try:
+        duration = _probe(EBOOK_AUDIO)
+        request = {
+            "absBaseUrl": server.base_url,
+            "libraryItemId": "book",
+            "token": GOOD_TOKEN,
+            "files": [{"url": server.file_url("book", "ino3"), "ino": "ino3", "filename": EBOOK_AUDIO.name, "startOffset": 0, "duration": duration}],
+            "mode": "ebook",
+            "ebookUrl": f"{server.base_url}/api/items/book/ebook",
+        }
+        job, _ = manager.submit(request)
+        assert wait_for(lambda: job.is_terminal, timeout=600), job.to_status()
+        assert job.status == "done", job.to_status()
+        transcript = job.result
+        assert transcript["source"] == "ebook"
+        assert job.warnings == []
+
+        # Every word of the story in the EPUB is in the transcript, in order, with the book's punctuation
+        paragraphs = [p["text"] for p in read_epub(EBOOK)["paragraphs"]]
+        start = paragraphs.index("The Selfish Giant.")
+        end = paragraphs.index("The Devoted Friend.")
+        story_words = " ".join(paragraphs[start:end]).split()
+        out_words = [w["w"] for s in transcript["segments"] for w in s["words"]]
+        first = next(i for i in range(len(out_words)) if out_words[i : i + 3] == ["The", "Selfish", "Giant."])
+        assert out_words[first : first + len(story_words)] == story_words
+        # Before the story only the title page, which the narrator reads in the LibriVox intro
+        assert out_words[:first] == ["The", "Happy", "Prince", "And", "Other", "Tales", "BY", "OSCAR", "WILDE"]
+
+        heading = next(s for s in transcript["segments"] if s.get("heading") and s["text"] == "The Selfish Giant.")
+        all_words = [w for s in transcript["segments"] for w in s["words"]]
+        assert heading["start"] < 30  # the title is read right after the LibriVox intro
+        assert all_words[first + len(story_words) - 1]["start"] > duration - 60  # the story ends near the end of the file
+        stats = transcript["alignment"]
+        assert stats["interpolatedWords"] < 0.05 * len(story_words)
+    finally:
+        manager.stop()
+        server.close()

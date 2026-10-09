@@ -9,6 +9,9 @@ Multi-file book, offsets computed by summing each file's duration in the order g
 Multi-file book with explicit book-timeline offsets (e.g. copied from ABS media.tracks):
   python transcribe_cli.py --manifest files.json --out book.json
   where files.json = [{"path": "01.mp3", "startOffset": 0, "duration": 1234.5}, ...]
+
+Use the text of the book's EPUB instead of Whisper's text (aligned to the audio):
+  python transcribe_cli.py 01.mp3 02.mp3 --ebook book.epub --out book.json
 """
 
 import argparse
@@ -66,10 +69,17 @@ def main():
     parser.add_argument("--compute-type", default=None, help="Default: float16 on cuda, int8 on cpu")
     parser.add_argument("--model-dir", default=None, help="Model download/cache directory")
     parser.add_argument("--library-item-id", default=None, help="Value for the transcript's libraryItemId field")
+    parser.add_argument("--ebook", default=None, help="EPUB of the book: output the book's text aligned to the audio")
     args = parser.parse_args()
 
     if not args.audio_files and not args.manifest:
         parser.error("give audio files or --manifest")
+    ebook = None
+    if args.ebook:
+        from transcribe_helper.ebook import read_epub
+
+        ebook = read_epub(args.ebook)  # fail early, before spending GPU time
+        print(f"Ebook: {ebook['title']} ({len(ebook['paragraphs'])} paragraphs)")
 
     files = load_files(args)
     total_duration = sum(f["duration"] for f in files)
@@ -103,6 +113,11 @@ def main():
 
     segments = merge_file_results(results, files)
     transcript = build_transcript(segments, files, args.library_item_id, args.model, language)
+    if ebook:
+        from transcribe_helper.align import align_ebook
+
+        transcript = align_ebook(transcript, ebook)
+        print(f"Aligned with the ebook: {transcript['alignment']}")
     problems = sanity_check(transcript)
     summary = coverage_summary(transcript)
 
