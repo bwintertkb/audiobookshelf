@@ -89,6 +89,20 @@ To try it on public-domain audio: `python scripts/fetch_sample.py --all` downloa
 "The Raven and Other Poems" (12 short MP3s) into `tests/fixtures/audio`. On an RTX 5090 the 35 minutes
 transcribe in ~22 s with `large-v3-turbo` (~100x real time).
 
+### With the book's EPUB
+
+Add `--ebook book.epub` to output the book's own text (punctuation, paragraphs, headings) timed by
+the narration instead of Whisper's text; text that is not narrated (title pages, contents, licenses,
+captions, footnotes) is left out. To align an existing transcript without transcribing again:
+
+```powershell
+.\.venv\Scripts\python align_ebook.py transcript.json book.epub --out book-transcript.json
+```
+
+`python scripts/fetch_sample.py --ebook-sample --all` downloads a matching pair to try it: LibriVox's
+"The Happy Prince and Other Tales" (5 MP3s, 1 h 45 min) and the Project Gutenberg EPUB. Aligning the
+whole book takes about 0.1 s once it is transcribed.
+
 ## Run the service
 
 ```powershell
@@ -117,9 +131,11 @@ instead of downloaded). Environment variables `TRANSCRIBE_HELPER_PORT`,
 1. Start the helper on the PC you use ABS from.
 2. In the ABS web player, open **Player settings** (the gear icon in the player) and check that the
    transcription helper URL is `http://127.0.0.1:8765`; the status next to it should say it is connected.
-3. On a book's page, open the **⋮** menu and choose **Create transcript**. Progress is shown on the
-   page; you can navigate away and come back. When it finishes, the transcript is uploaded to ABS.
-4. Play the book and press the transcript button in the player.
+3. On a book's page, open the **⋮** menu and choose **Create transcript** (or **Create transcript
+   from ebook** if the book has an EPUB). Progress is shown on the page; you can navigate away and come
+   back. When it finishes, the transcript is uploaded to ABS.
+4. Play the book and press the transcript button in the player. With a transcript from the ebook,
+   **Read** the book while it plays to follow along in the ebook reader.
 
 Browser notes:
 - **Chrome / Edge 142+**: if ABS is served from a public address, the browser asks once for
@@ -134,14 +150,20 @@ Browser notes:
 | Method | Path | |
 |---|---|---|
 | GET | `/health` | version, GPU info, model and its state (`loading`, `ready`, `error`), busy/idle, queue length |
-| POST | `/jobs` | `{absBaseUrl, libraryItemId, token, files: [{url?, path?, ino?, filename?, startOffset, duration}], model?, language?, beamSize?, force?}` → `201 {jobId}` (or `200` with `existing: true` if a job for that item is already running) |
+| POST | `/jobs` | `{absBaseUrl, libraryItemId, token, files: [{url?, path?, ino?, filename?, startOffset, duration}], model?, language?, beamSize?, force?, mode?, ebookUrl?, baseTranscriptUrl?}` → `201 {jobId}` (or `200` with `existing: true` if a job for that item is already running) |
 | GET | `/jobs` | all jobs (status only) |
-| GET | `/jobs/{id}` | `status` (`downloading`, `queued`, `transcribing`, `done`, `error`, `cancelled`), `progress` 0–1, `downloadProgress`, `currentFileIndex`, `numFiles`, `etaSec`, `error`, `errorCode`, `warnings` |
+| GET | `/jobs/{id}` | `status` (`downloading`, `queued`, `transcribing`, `aligning`, `done`, `error`, `cancelled`), `mode`, `progress` 0–1, `downloadProgress`, `currentFileIndex`, `numFiles`, `etaSec`, `error`, `errorCode`, `warnings`, `alignment` |
 | GET | `/jobs/{id}/result` | v1 transcript JSON once `done` (409 before) |
 | DELETE | `/jobs/{id}` | cancel |
 
+`mode: "ebook"` (with `ebookUrl`, the item's `/api/items/<id>/ebook` on the ABS server) produces a
+transcript with the EPUB's text (`source: "ebook"`). If `baseTranscriptUrl` points to the item's
+existing Whisper transcript and it was made from the same audio files, it is reused instead of
+transcribing again.
+
 Error codes: `auth_expired` (the ABS token was rejected; start the job again), `forbidden`,
-`not_found`, `download_failed`, `gpu_unavailable`, `transcription_failed`, `invalid_request`.
+`not_found`, `download_failed`, `gpu_unavailable`, `transcription_failed`, `invalid_request`,
+`ebook_unsupported` (not an EPUB, or DRM protected), `ebook_mismatch` (the ebook text does not match the audio).
 
 Behaviour details:
 - Audio is downloaded right after a job is submitted (ABS access tokens expire after about an hour),
@@ -156,15 +178,18 @@ Behaviour details:
 
 ```powershell
 .\.venv\Scripts\python -m pip install -r requirements-dev.txt
-.\.venv\Scripts\python scripts\fetch_sample.py     # sample audio for the end-to-end test
+.\.venv\Scripts\python scripts\fetch_sample.py                  # sample audio for the end-to-end test
+.\.venv\Scripts\python scripts\fetch_sample.py --ebook-sample   # chapter + EPUB for the ebook e2e test
 .\.venv\Scripts\python -m pytest
 ```
 
-Unit tests cover offset merging, clamping, monotonic ordering, the format and sanity checks; job and
-API tests use a fake ABS server and a fake transcriber (downloads, auth errors, cancel/resume,
-one-job-at-a-time, path mapping, CORS/PNA, host checks). `tests/test_e2e.py` runs a real model
-(`tiny` by default, `TRANSCRIBE_HELPER_E2E_MODEL=large-v3-turbo` to change) on three LibriVox tracks
-served by the fake ABS server; it is skipped when the samples or CUDA are missing.
+Unit tests cover offset merging, clamping, monotonic ordering, the format and sanity checks, EPUB
+reading (spine order, notes, DRM) and ebook alignment (front matter, intros, misheard words, chapter
+announcements, wrong ebook); job and API tests use a fake ABS server and a fake transcriber (downloads,
+auth errors, cancel/resume, one-job-at-a-time, path mapping, CORS/PNA, host checks, ebook mode).
+`tests/test_e2e.py` runs a real model (`tiny` by default, `TRANSCRIBE_HELPER_E2E_MODEL=large-v3-turbo`
+to change) on LibriVox tracks served by the fake ABS server, including a chapter aligned with the full
+Gutenberg EPUB; it is skipped when the samples or CUDA are missing.
 
 ## Troubleshooting
 

@@ -38,6 +38,26 @@ Chrome and Edge 142+ ask once for permission to access devices on your local net
 
 On an RTX 5090 with `large-v3-turbo`, transcription runs at roughly 100x real time: a 15 hour book takes about 10 minutes plus the download time.
 
+## Use the book's own text (EPUB)
+
+If the book also has an EPUB in ABS (put the `.epub` in the book's folder; the book page then shows **Read**), choose **Create transcript from ebook** in the **⋮** menu. The helper still times the words with Whisper on your GPU, then lines up the EPUB's text with the narration:
+
+- The transcript shows the book's real text: spelling, punctuation, quotes, paragraphs and chapter headings.
+- Text that is not read aloud (title pages, contents, copyright and license pages, captions, footnotes) is left out; speech that is not in the book (narrator intros, "Chapter two of …" announcements) simply has no text.
+- If the book already has a normal transcript made from the same audio files, it is reused: no audio is downloaded or transcribed and the alignment takes seconds.
+- Only DRM-free EPUB files can be used. If the EPUB is a different edition or the wrong book, the job stops with "The ebook text does not match the audio". An abridged recording only gets the parts that were read.
+
+## Read along in the ebook reader
+
+With a transcript made from the ebook, open the book with **Read** while the audiobook plays:
+
+- The narrated sentence and word are highlighted in the book itself, with the book's formatting (fonts, italics, images, the reader's themes and font settings), at every playback speed. The player stays at the bottom of the screen with its speed control.
+- Pages turn by themselves to follow the narration. Turn a page yourself to look around and use **Return to narration** to follow the audio again.
+- Tap a word to play from there.
+- When the audiobook is not playing, **Play from here** starts it at the first word of the page you are reading.
+
+This uses the [CSS Custom Highlight API](https://developer.mozilla.org/en-US/docs/Web/API/CSS_Custom_Highlight_API) (Chrome/Edge 105+, Safari 17.2+, Firefox 140+); older browsers highlight the sentence only.
+
 ## Permissions
 
 | Action                      | Requires                                                      |
@@ -109,8 +129,26 @@ All times are seconds on the **book's timeline** (what the player shows), not pe
 
 - `durationSec` is the playable duration (sum of the included tracks).
 - `files` records the audio files the transcript was made from; clients compare it with `media.tracks` to detect changed audio.
-- `source` is `whisper` for speech recognition. Other producers (for example aligning an ebook's text to the audio) can use the same format with a different `source`.
+- `source` is `whisper` for speech recognition, or `ebook` for the text of the item's EPUB aligned to the audio.
 - Segments and word start times are in ascending order; words never extend past their file's end.
+
+Ebook transcripts (`"source": "ebook"`) use the same structure, with optional extras:
+
+```json
+{
+  "source": "ebook",
+  "ebook": { "title": "The Happy Prince, and Other Tales" },
+  "alignment": { "bookWords": 19314, "keptWords": 16162, "matchedWords": 16108, "interpolatedWords": 54, "droppedWords": 3152, "audioWords": 16366, "audioWordsMatched": 16226 },
+  "segments": [
+    { "start": 24.33, "end": 25.65, "text": "The Happy Prince.", "words": [ … ], "paragraph": true, "heading": true, "spine": 2 },
+    { "start": 26.99, "end": 31.9, "text": "High above the city, on a tall column, stood the statue of the Happy Prince.", "words": [ … ], "paragraph": true, "spine": 2 }
+  ]
+}
+```
+
+- Segments are the book's sentences; `paragraph: true` marks the first sentence of a paragraph and `heading: true` a heading.
+- `spine` is the position in the EPUB's spine (the OPF `<itemref>` list, as epub.js numbers sections) of the document the sentence comes from. Words are the EPUB's whitespace-separated words, in order, so readers can find them in that document.
+- `alignment` reports how much of the book was matched (`keptWords` = words in the transcript, `interpolatedWords` = misheard words timed from their neighbours, `droppedWords` = text not narrated).
 
 ## Limitations
 
@@ -119,3 +157,5 @@ All times are seconds on the **book's timeline** (what the player shows), not pe
 - Creating transcripts needs the helper on the same PC as the browser; Safari cannot reach it from an HTTPS page.
 - When the browser cannot play the files directly and ABS streams a transcoded HLS version, timing can drift slightly for VBR MP3 files without a duration header (ABS chapter markers have the same drift).
 - While casting, the highlight follows the cast device's (less frequent) position updates.
+- Ebook mode needs a DRM-free EPUB of the same edition as the recording; read-along in the reader works with the item's primary ebook (not supplementary ebook files).
+- Long stretches the narrator reads differently from the printed text (e.g. tables, lists read as sentences) are shown with estimated timing or left out.
