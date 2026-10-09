@@ -18,7 +18,10 @@ export const state = () => ({
     authorSortBy: 'name',
     authorSortDesc: false,
     jumpForwardAmount: 10,
-    jumpBackwardAmount: 10
+    jumpBackwardAmount: 10,
+    transcriptHelperUrl: 'http://127.0.0.1:8765',
+    showTranscriptPanel: false,
+    transcriptFontScale: 1
   }
 })
 

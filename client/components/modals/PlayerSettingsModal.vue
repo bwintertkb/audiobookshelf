@@ -17,11 +17,20 @@
       <div class="flex items-center mb-4">
         <ui-select-input v-model="playbackRateIncrementDecrement" :label="$strings.LabelPlaybackRateIncrementDecrement" menuMaxHeight="250px" :items="playbackRateIncrementDecrementValues" @input="setPlaybackRateIncrementDecrementAmount" />
       </div>
+      <div class="mb-4">
+        <div class="flex items-end">
+          <ui-text-input-with-label v-model.trim="transcriptHelperUrl" :label="$strings.LabelTranscriptHelperUrl" :note="$strings.LabelTranscriptHelperUrlNote" class="grow" @blur="setTranscriptHelperUrl" />
+          <ui-btn small class="ml-2 h-9" :loading="transcriptHelper.checking" @click="setTranscriptHelperUrl">{{ $strings.ButtonTest }}</ui-btn>
+        </div>
+        <p v-if="transcriptHelper.url" class="text-xs px-1 pt-1" :class="transcriptHelperStatus.error ? 'text-error' : 'text-success'">{{ transcriptHelperStatus.text }}</p>
+      </div>
     </div>
   </modals-modal>
 </template>
 
 <script>
+import { normalizeHelperUrl } from '@/players/transcriptUtils'
+
 export default {
   props: {
     value: Boolean
@@ -40,7 +49,13 @@ export default {
       jumpForwardAmount: 10,
       jumpBackwardAmount: 10,
       playbackRateIncrementDecrementValues: [0.1, 0.05],
-      playbackRateIncrementDecrement: 0.1
+      playbackRateIncrementDecrement: 0.1,
+      transcriptHelperUrl: ''
+    }
+  },
+  watch: {
+    show(val) {
+      if (val) this.$store.dispatch('transcripts/checkHelper')
     }
   },
   computed: {
@@ -51,6 +66,17 @@ export default {
       set(val) {
         this.$emit('input', val)
       }
+    },
+    transcriptHelper() {
+      return this.$store.state.transcripts.helper
+    },
+    transcriptHelperStatus() {
+      const helper = this.transcriptHelper
+      if (!helper.available) return { error: true, text: this.$getString('MessageTranscriptHelperNotReachable', [helper.url]) }
+      const health = helper.health || {}
+      if (health.modelState === 'error') return { error: true, text: this.$getString('ToastTranscriptHelperGpuUnavailable', [health.modelError]) }
+      const gpuName = health.gpu?.name || health.device || ''
+      return { error: false, text: this.$getString('LabelTranscriptHelperConnected', [[gpuName, health.model].filter(Boolean).join(', ')]) }
     }
   },
   methods: {
@@ -69,11 +95,18 @@ export default {
       this.playbackRateIncrementDecrement = val
       this.$store.dispatch('user/updateUserSettings', { playbackRateIncrementDecrement: val })
     },
+    async setTranscriptHelperUrl() {
+      const url = normalizeHelperUrl(this.transcriptHelperUrl)
+      this.transcriptHelperUrl = url
+      await this.$store.dispatch('user/updateUserSettings', { transcriptHelperUrl: url })
+      this.$store.dispatch('transcripts/checkHelper', true)
+    },
     settingsUpdated() {
       this.useChapterTrack = this.$store.getters['user/getUserSetting']('useChapterTrack')
       this.jumpForwardAmount = this.$store.getters['user/getUserSetting']('jumpForwardAmount')
       this.jumpBackwardAmount = this.$store.getters['user/getUserSetting']('jumpBackwardAmount')
       this.playbackRateIncrementDecrement = this.$store.getters['user/getUserSetting']('playbackRateIncrementDecrement')
+      this.transcriptHelperUrl = this.$store.getters['transcripts/getHelperUrl']
     }
   },
   mounted() {

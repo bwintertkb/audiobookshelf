@@ -620,6 +620,9 @@ export default {
 
     this.loadTasks()
 
+    // Reconnect to transcript jobs running on the local transcribe helper
+    this.$store.dispatch('transcripts/init')
+
     if (this.$route.query.error) {
       this.$toast.error(this.$route.query.error)
       this.$router.replace(this.$route.path)
