@@ -84,11 +84,12 @@ def run_test_inference(model_name="tiny", device="cuda", compute_type="float16",
     This exercises cuBLAS and cuDNN, which a device count alone does not."""
     setup_cuda_libraries()
     import numpy as np
-    from faster_whisper import WhisperModel
+
+    from .transcriber import load_whisper_model
 
     t0 = time.perf_counter()
     try:
-        model = WhisperModel(model_name, device=device, compute_type=compute_type, download_root=download_root)
+        model = load_whisper_model(model_name, device=device, compute_type=compute_type, download_root=download_root)
     except Exception as error:
         raise GpuCheckError(f"Failed to load model '{model_name}' on {device} ({compute_type}): {error}") from error
     load_sec = time.perf_counter() - t0

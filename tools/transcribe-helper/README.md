@@ -9,6 +9,19 @@ transcript back to the browser, which uploads it to ABS. Nothing runs on the ABS
 - One GPU job at a time; further jobs queue. The model stays loaded between jobs.
 - Your ABS access token is kept in memory only while audio is downloading, and is never logged or written to disk.
 
+## Everything runs locally on your GPU
+
+- Transcription runs on **your NVIDIA GPU** with faster-whisper (CTranslate2). "Whisper" is the name of
+  the open-weights speech model; **no OpenAI (or any other cloud) API is used**, and no audio or text
+  leaves your machine.
+- The helper never falls back to the CPU on its own: if CUDA is not usable, jobs fail with
+  `gpu_unavailable` (CPU only runs if you explicitly set `device = "cpu"`).
+- Network access is limited to:
+  - your ABS server, to download the book's audio (skipped for files reachable through `path_mappings`);
+  - Hugging Face, **only the first time** a model is used, to download its weights (~1.6 GB for
+    `large-v3-turbo`). After that the model is loaded from the local cache without any network request
+    (`check_gpu.py` downloads the small `tiny` model the same way). Telemetry is disabled.
+
 ## Requirements
 
 | | |

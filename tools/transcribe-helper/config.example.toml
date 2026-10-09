@@ -18,7 +18,7 @@ model = "large-v3-turbo"
 # Models a job may request
 # allowed_models = ["tiny", "base", "small", "medium", "large-v3", "large-v3-turbo"]
 
-device = "cuda"          # "cpu" works too, but is very slow
+device = "cuda"          # the GPU; the helper never falls back to "cpu" unless you set it here
 # compute_type = "float16" # default: float16 on cuda, int8 on cpu
 beam_size = 5
 # batch_size = 0         # >1 enables faster-whisper's batched pipeline (faster, no condition_on_previous_text)

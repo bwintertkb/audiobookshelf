@@ -13,6 +13,20 @@ class TranscriptionCancelled(Exception):
     pass
 
 
+def load_whisper_model(model_name, device="cuda", compute_type="float16", download_root=None):
+    """Load a faster-whisper model from the local model cache. Only when it has never been downloaded
+    are the weights fetched (once) from Hugging Face; transcription itself never uses the network."""
+    setup_cuda_libraries()
+    from faster_whisper import WhisperModel
+    from huggingface_hub.errors import LocalEntryNotFoundError
+
+    try:
+        return WhisperModel(model_name, device=device, compute_type=compute_type, download_root=download_root, local_files_only=True)
+    except LocalEntryNotFoundError:
+        logger.info("Model %s is not in the local cache yet; downloading its weights from Hugging Face (one time)", model_name)
+        return WhisperModel(model_name, device=device, compute_type=compute_type, download_root=download_root)
+
+
 class Transcriber:
     """Loads a faster-whisper model once and reuses it for every file.
 
@@ -22,14 +36,14 @@ class Transcriber:
 
     def __init__(self, model_name, device="cuda", compute_type="float16", download_root=None, batch_size=0):
         setup_cuda_libraries()
-        from faster_whisper import BatchedInferencePipeline, WhisperModel
+        from faster_whisper import BatchedInferencePipeline
 
         self.model_name = model_name
         self.device = device
         self.compute_type = compute_type
         self.batch_size = batch_size
         t0 = time.perf_counter()
-        self.model = WhisperModel(model_name, device=device, compute_type=compute_type, download_root=download_root)
+        self.model = load_whisper_model(model_name, device=device, compute_type=compute_type, download_root=download_root)
         self.pipeline = BatchedInferencePipeline(model=self.model) if batch_size and batch_size > 1 else None
         self.load_sec = time.perf_counter() - t0
         logger.info("Loaded model %s on %s (%s) in %.1fs", model_name, device, compute_type, self.load_sec)

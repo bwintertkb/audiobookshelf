@@ -21,6 +21,8 @@ def setup_cuda_libraries():
 
     # Windows without Developer Mode can't create symlinks; HF Hub falls back to copies and warns on every load
     os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
+    # Hugging Face is only contacted to download model weights the first time; never send telemetry
+    os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
 
     try:
         import nvidia  # namespace package provided by the nvidia-* wheels
