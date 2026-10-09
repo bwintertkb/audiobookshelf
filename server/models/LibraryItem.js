@@ -1036,7 +1036,8 @@ class LibraryItem extends Model {
       scanVersion: this.lastScanVersion,
       media: this.media.toOldJSONExpanded(this.id),
       // LibraryFile JSON includes a fileType property that may not be saved in libraryFiles column in the database
-      libraryFiles: this.getLibraryFilesJson()
+      libraryFiles: this.getLibraryFilesJson(),
+      hasTranscript: !!this.extraData?.transcript
     }
   }
 }

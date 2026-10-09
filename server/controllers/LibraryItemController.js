@@ -1,5 +1,6 @@
 const { Request, Response, NextFunction } = require('express')
 const Path = require('path')
+const zlib = require('zlib')
 const fs = require('../libs/fsExtra')
 const cron = require('../libs/nodeCron')
 const uaParserJs = require('../libs/uaParser')
@@ -19,6 +20,7 @@ const RssFeedManager = require('../managers/RssFeedManager')
 const CacheManager = require('../managers/CacheManager')
 const CoverManager = require('../managers/CoverManager')
 const ShareManager = require('../managers/ShareManager')
+const TranscriptManager = require('../managers/TranscriptManager')
 
 /**
  * @typedef RequestUserObject
@@ -1208,6 +1210,114 @@ class LibraryItemController {
     await req.libraryItem.save()
 
     SocketAuthority.libraryItemEmitter('item_updated', req.libraryItem)
+    res.sendStatus(200)
+  }
+
+  /**
+   * GET api/items/:id/transcript
+   * Read-along transcript JSON (served gzip encoded)
+   *
+   * @param {LibraryItemControllerRequest} req
+   * @param {Response} res
+   */
+  async getTranscript(req, res) {
+    const transcriptPath = TranscriptManager.getTranscriptPath(req.libraryItem.id)
+    if (!req.libraryItem.extraData?.transcript || !(await fs.pathExists(transcriptPath))) {
+      return res.sendStatus(404)
+    }
+
+    res.setHeader('Content-Type', 'application/json; charset=utf-8')
+    res.setHeader('Cache-Control', 'private, no-cache')
+    res.setHeader('Vary', 'Accept-Encoding')
+    if (!req.acceptsEncodings('gzip')) {
+      return fs.createReadStream(transcriptPath).pipe(zlib.createGunzip()).pipe(res)
+    }
+    res.setHeader('Content-Encoding', 'gzip')
+    res.sendFile(transcriptPath, (error) => {
+      if (error && !res.headersSent) {
+        Logger.error(`[LibraryItemController] Failed to send transcript for "${req.libraryItem.media.title}"`, error)
+        res.sendStatus(500)
+      }
+    })
+  }
+
+  /**
+   * POST api/items/:id/transcript
+   * Upload or replace the read-along transcript.
+   * Multipart file field "transcript" (gzipped or plain JSON) or a JSON body
+   *
+   * @param {LibraryItemControllerRequest} req
+   * @param {Response} res
+   */
+  async uploadTranscript(req, res) {
+    if (!req.user.canUpdate) {
+      Logger.warn(`[LibraryItemController] User "${req.user.username}" attempted to upload a transcript without permission`)
+      return res.sendStatus(403)
+    }
+    if (!req.libraryItem.isBook || !req.libraryItem.media.hasAudioTracks) {
+      return res.status(400).send('Library item has no audio tracks')
+    }
+
+    let transcript = null
+    const transcriptFile = req.files?.transcript
+    if (transcriptFile) {
+      const parsed = await TranscriptManager.parseUploadedFile(transcriptFile)
+      if (transcriptFile.tempFilePath) {
+        await fs.remove(transcriptFile.tempFilePath).catch(() => {})
+      }
+      if (parsed.error) {
+        Logger.error(`[LibraryItemController] Invalid transcript upload for "${req.libraryItem.media.title}": ${parsed.error}`)
+        return res.status(parsed.status || 400).send(parsed.error)
+      }
+      transcript = parsed.transcript
+    } else if (req.body?.version !== undefined) {
+      transcript = req.body
+    } else {
+      return res.status(400).send('Invalid request no transcript')
+    }
+
+    const validationError = TranscriptManager.validateTranscript(transcript, req.libraryItem)
+    if (validationError) {
+      Logger.error(`[LibraryItemController] Invalid transcript for "${req.libraryItem.media.title}": ${validationError}`)
+      return res.status(400).send(validationError)
+    }
+
+    await TranscriptManager.saveTranscript(req.libraryItem.id, transcript)
+
+    const summary = TranscriptManager.getSummary(transcript)
+    req.libraryItem.extraData = { ...(req.libraryItem.extraData || {}), transcript: summary }
+    req.libraryItem.changed('extraData', true)
+    await req.libraryItem.save()
+
+    SocketAuthority.libraryItemEmitter('item_updated', req.libraryItem)
+    res.json({
+      success: true,
+      transcript: summary
+    })
+  }
+
+  /**
+   * DELETE api/items/:id/transcript
+   *
+   * @param {LibraryItemControllerRequest} req
+   * @param {Response} res
+   */
+  async deleteTranscript(req, res) {
+    const hadTranscript = !!req.libraryItem.extraData?.transcript
+    const removed = await TranscriptManager.removeTranscript(req.libraryItem.id)
+    if (!hadTranscript && !removed) {
+      return res.sendStatus(404)
+    }
+
+    if (hadTranscript) {
+      const extraData = { ...req.libraryItem.extraData }
+      delete extraData.transcript
+      req.libraryItem.extraData = extraData
+      req.libraryItem.changed('extraData', true)
+      await req.libraryItem.save()
+
+      SocketAuthority.libraryItemEmitter('item_updated', req.libraryItem)
+    }
     res.sendStatus(200)
   }
 
