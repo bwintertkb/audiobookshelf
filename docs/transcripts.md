@@ -3,29 +3,30 @@
 Create a word-level transcript of an audiobook on your own GPU, store it on the Audiobookshelf server, and follow along in the web player: the current word and sentence are highlighted, the text scrolls with the audio, and clicking a word jumps there.
 
 ```
- Browser (ABS web client)               Your PC                        ABS server
- [Create transcript] ──── job ───────▶  transcribe helper
-                                        (faster-whisper on CUDA)
-                                         │ downloads audio ◀───────── /api/items/:id/file/:ino
- progress ◀──────────────────────────────┤
- result ◀────────────────────────────────┘
- upload ─────────────────────────────────────────────────────────────▶ POST /api/items/:id/transcript
- player transcript panel ◀───────────────────────────────────────────── GET /api/items/:id/transcript
+ Browser (ABS web client on your PC)                                    ABS server
+ [Create transcript] -> checks the GPU, downloads the speech model once
+ Whisper on your GPU (WebGPU workers) ◀── 16 kHz audio ──────────────── GET /api/items/:id/transcript/audio/:fileid (ffmpeg)
+ EPUB text lined up with the speech (ebook mode) ◀── EPUB ───────────── GET /api/items/:id/ebook
+ upload ────────────────────────────────────────────────────────────────▶ POST /api/items/:id/transcript
+ player transcript panel, ebook reader ◀─────────────────────────────── GET /api/items/:id/transcript
 ```
 
-Transcription never runs on the ABS server. It runs in a small helper service on the computer you browse ABS from (`tools/transcribe-helper`). Once uploaded, a transcript works in any browser.
+Everything happens in the Audiobookshelf web page: speech recognition runs on the GPU of the computer you browse from, with the open-weights Whisper model (`whisper-large-v3-turbo`, via [transformers.js](https://huggingface.co/docs/transformers.js) and WebGPU). The ABS server only converts the audio for it with ffmpeg and stores the result; no audio or text is sent anywhere else. Once uploaded, a transcript works in any browser and in the Android app.
 
-## Setup
+## Requirements
 
-1. Install and start the helper on the PC with the NVIDIA GPU: see [`tools/transcribe-helper/README.md`](../tools/transcribe-helper/README.md) (Windows and Linux). In short: create a venv, `pip install -r requirements.txt`, `python check_gpu.py`, then `python run_helper.py`.
-2. Allow your ABS address in the helper: copy `config.example.toml` to `config.toml` and add the address you open ABS at (e.g. `https://abs.example.com`) to `allowed_origins`.
-3. In the ABS web player, open **Player settings** (gear icon in the player). The **Transcription helper URL** defaults to `http://127.0.0.1:8765`; the line below it shows whether the helper is connected and which GPU and model it uses.
+- A browser with WebGPU: Chrome or Edge 113+, Firefox 141+ (Windows). Hardware acceleration must be on.
+- ABS opened over HTTPS (or on the same computer as `localhost`): browsers only allow the GPU on secure pages. `http://<LAN address>` does not work.
+- A GPU with enough memory; it is used by up to 8 workers at a time (fewer on smaller GPUs).
+- About 1.6 GB of browser storage for the speech model (0.8 GB on GPUs without 16-bit float support, which use a smaller model).
 
-Chrome and Edge 142+ ask once for permission to access devices on your local network when ABS is served from a public address; allow it. Safari cannot call the helper from an HTTPS page, so use Chrome, Edge or Firefox to create transcripts (viewing works in every browser).
+Nothing has to be installed: the first time, the setup dialog downloads the model from Hugging Face into the browser.
 
 ## Use
 
-- **Create**: on a book's page open the **⋮** menu and choose **Create transcript** (shown to users who can edit items, when the helper is reachable). Progress, the current file and the time remaining are shown on the page. The job keeps running if you navigate away or reload; the page reconnects to it. When it finishes the transcript is uploaded and a confirmation appears.
+- **Create**: on a book's page open the **⋮** menu and choose **Create transcript** (shown to users who can edit items). A dialog checks this computer: secure page, GPU (with its name), speech model (with a **Download** button the first time, about a minute on a fast connection) and storage space, and says what is missing. Pick the language (preselected from the book's metadata, or detected automatically) and press **Start**. Progress, the number of GPU workers and the time remaining are shown on the page.
+  - Keep the page open while it transcribes (you can use Audiobookshelf in it meanwhile; the browser asks before you close it). Finished parts are kept in the browser: if the page is closed, **Create transcript** continues where it stopped.
+  - When it finishes the transcript is uploaded and a confirmation appears.
 - **Re-create**: **Re-create transcript** in the same menu (asks for confirmation) replaces it.
 - **Delete**: **Delete transcript** (users with delete permission).
 - **Read along**: while the book plays, press the transcript button (subtitles icon) in the player. The panel opens on the right (full width on narrow screens) and remembers whether it was open.
@@ -36,11 +37,15 @@ Chrome and Edge 142+ ask once for permission to access devices on your local net
   - Change the text size with the A- / A+ buttons.
   - If the book's audio files changed after the transcript was made (files added, removed or replaced), the panel warns that the highlighting may be out of sync; re-create the transcript.
 
-On an RTX 5090 with `large-v3-turbo`, transcription runs at roughly 100x real time: a 15 hour book takes about 10 minutes plus the download time.
+On an RTX 5090, transcription in the browser runs at about 30x real time with 8 workers: a 15 hour book takes about 30 minutes. Its words match the transcribe helper's (faster-whisper) for about 97% of the text, with word times within 0.1 s for three quarters of the words.
+
+### Transcribe helper (optional)
+
+The Python helper in [`tools/transcribe-helper`](../tools/transcribe-helper/README.md) (faster-whisper on CUDA) is about 3x faster but has to be installed and running on the PC. To use it, choose **Player settings → Create transcripts with → Transcribe helper (advanced)** and set its address; see its README for setup (`allowed_origins`, browser permissions). Helper jobs continue in the helper when the page is closed.
 
 ## Use the book's own text (EPUB)
 
-If the book also has an EPUB in ABS (put the `.epub` in the book's folder; the book page then shows **Read**), choose **Create transcript from ebook** in the **⋮** menu. The helper still times the words with Whisper on your GPU, then lines up the EPUB's text with the narration:
+If the book also has an EPUB in ABS (put the `.epub` in the book's folder; the book page then shows **Read**), choose **Create transcript from ebook** in the **⋮** menu. The words are still timed with Whisper on your GPU, then the EPUB's text is lined up with the narration:
 
 - The transcript shows the book's real text: spelling, punctuation, quotes, paragraphs and chapter headings.
 - Text that is not read aloud (title pages, contents, copyright and license pages, captions, footnotes) is left out; speech that is not in the book (narrator intros, "Chapter two of …" announcements) simply has no text.
@@ -86,6 +91,7 @@ Transcripts are stored gzipped at `<metadata>/items/<libraryItemId>/transcript.j
 | GET    | `/api/items/:id/transcript` | the transcript JSON (served `Content-Encoding: gzip`, with ETag/304); 404 if none                                                                                                    |
 | POST   | `/api/items/:id/transcript` | upload or replace: multipart file field `transcript` (gzipped or plain JSON), or a JSON body (JSON bodies are limited to 10 MB by the server, so use the file upload for long books) |
 | DELETE | `/api/items/:id/transcript` | remove                                                                                                                                                                               |
+| GET    | `/api/items/:id/transcript/audio/:fileid?start=<sec>&duration=<sec>` | part of an audio file (by inode) decoded with ffmpeg to raw 16 kHz mono 16-bit PCM (`s16le`), for speech recognition in the browser; at most 900 s per request; requires "Can Update" |
 
 `GET /api/items/:id?expanded=1` includes `"hasTranscript": true|false`. Uploads and deletes emit the `item_updated` socket event. Uploads are validated: `version` must be 1, `libraryItemId` must match the URL, every segment/word time must be a number within the item's playable duration (+1 s), and word start times must not decrease. Limits: 64 MB uploaded, 256 MB after decompression.
 
@@ -163,7 +169,7 @@ Ebook transcripts (`"source": "ebook"`) use the same structure, with optional ex
 
 - Web client and the Android app built from the `feature/transcripts` branch of `audiobookshelf-app`; the official app builds and iOS do not show transcripts.
 - Books only (no podcast episodes).
-- Creating transcripts needs the helper on the same PC as the browser; Safari cannot reach it from an HTTPS page.
+- Creating transcripts needs a browser with WebGPU on a page served over HTTPS (or localhost), and the page has to stay open meanwhile (the optional helper keeps working without it).
 - When the browser cannot play the files directly and ABS streams a transcoded HLS version, timing can drift slightly for VBR MP3 files without a duration header (ABS chapter markers have the same drift).
 - While casting, the highlight follows the cast device's (less frequent) position updates.
 - Ebook mode needs a DRM-free EPUB of the same edition as the recording; read-along in the reader works with the item's primary ebook (not supplementary ebook files).

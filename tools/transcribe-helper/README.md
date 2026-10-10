@@ -1,5 +1,10 @@
 # ABS transcribe helper
 
+**Optional.** The ABS web client creates transcripts by itself, on your GPU in the browser (WebGPU), with
+nothing to install; see [`docs/transcripts.md`](../../docs/transcripts.md). This helper is the faster
+alternative (about 3x) for people who want to run a local Python service; select it in the web player's
+**Player settings → Create transcripts with → Transcribe helper (advanced)**.
+
 A small local service that creates read-along transcripts for Audiobookshelf books on **your own GPU**.
 The ABS web client sends it a job, the helper downloads the book's audio from your ABS server,
 transcribes it with [faster-whisper](https://github.com/SYSTRAN/faster-whisper) and hands the
