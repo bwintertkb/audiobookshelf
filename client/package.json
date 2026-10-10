@@ -5,10 +5,12 @@
   "description": "Self-hosted audiobook and podcast client",
   "main": "index.js",
   "scripts": {
+    "predev": "node scripts/fetchTranscriberVendor.js",
     "dev": "nuxt",
     "dev2": "nuxt --hostname localhost --port 1337",
     "build": "nuxt build",
     "start": "nuxt start",
+    "pregenerate": "node scripts/fetchTranscriberVendor.js",
     "generate": "nuxt generate",
     "test": "npm run compile-tailwind && cypress run --component --browser chrome",
     "test-visually": "npm run compile-tailwind && cypress open --component --browser chrome",

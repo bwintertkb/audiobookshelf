@@ -129,6 +129,7 @@ class ApiRouter {
     this.router.get('/items/:id/transcript', LibraryItemController.middleware.bind(this), LibraryItemController.getTranscript.bind(this))
     this.router.post('/items/:id/transcript', LibraryItemController.middleware.bind(this), LibraryItemController.uploadTranscript.bind(this))
     this.router.delete('/items/:id/transcript', LibraryItemController.middleware.bind(this), LibraryItemController.deleteTranscript.bind(this))
+    this.router.get('/items/:id/transcript/audio/:fileid', LibraryItemController.middleware.bind(this), LibraryItemController.getTranscriptAudio.bind(this))
 
     //
     // User Routes

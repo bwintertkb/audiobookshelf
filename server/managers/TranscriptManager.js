@@ -2,13 +2,15 @@ const Path = require('path')
 const util = require('util')
 const zlib = require('zlib')
 const fs = require('../libs/fsExtra')
+const Ffmpeg = require('../libs/fluentFfmpeg')
 const Logger = require('../Logger')
 
 const gzip = util.promisify(zlib.gzip)
 const gunzip = util.promisify(zlib.gunzip)
 
 /**
- * Read-along transcripts (format v1) created by the local transcribe helper and uploaded by the web client.
+ * Read-along transcripts (format v1) created in the web client (speech recognition on the user's GPU in the
+ * browser, or by the local transcribe helper) and uploaded by it.
  * Stored gzipped in the item metadata folder: /metadata/items/<libraryItemId>/transcript.json.gz
  * The folder is removed when the library item is deleted (ApiRouter.handleDeleteLibraryItem).
  *
@@ -53,6 +55,20 @@ class TranscriptManager {
     this.MaxJsonBytes = 256 * 1024 * 1024
     /** Word times may overshoot the end of the audio slightly */
     this.TimeToleranceSec = 1
+    /** Longest audio part decoded for browser speech recognition in one request */
+    this.MaxAudioPartSec = 900
+  }
+
+  /**
+   * Decode part of an audio file to raw 16 kHz mono 16-bit PCM (what Whisper expects), for speech recognition in the browser
+   *
+   * @param {string} path
+   * @param {number} start - seconds into the file
+   * @param {number} duration - seconds
+   * @returns {import('../libs/fluentFfmpeg/index').FfmpegCommand} pipe() it to a stream; emits "error"
+   */
+  decodeAudioPart(path, start, duration) {
+    return Ffmpeg(path).seekInput(start).duration(duration).noVideo().audioChannels(1).audioFrequency(16000).audioCodec('pcm_s16le').format('s16le')
   }
 
   /**

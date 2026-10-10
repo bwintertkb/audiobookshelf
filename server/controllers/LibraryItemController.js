@@ -1322,6 +1322,44 @@ class LibraryItemController {
   }
 
   /**
+   * GET api/items/:id/transcript/audio/:fileid?start=<sec>&duration=<sec>
+   * Part of an audio file decoded for speech recognition in the browser: raw 16 kHz mono 16-bit PCM (s16le)
+   *
+   * @param {LibraryItemControllerRequest} req
+   * @param {Response} res
+   */
+  async getTranscriptAudio(req, res) {
+    if (!req.user.canUpdate) {
+      Logger.warn(`[LibraryItemController] User "${req.user.username}" attempted to get transcription audio without permission`)
+      return res.sendStatus(403)
+    }
+    const audioFile = req.libraryItem.isBook ? req.libraryItem.getAudioFileWithIno(req.params.fileid) : null
+    if (!audioFile) {
+      return res.sendStatus(404)
+    }
+    const start = Number(req.query.start)
+    const duration = Number(req.query.duration)
+    if (!Number.isFinite(start) || start < 0 || !Number.isFinite(duration) || duration <= 0 || duration > TranscriptManager.MaxAudioPartSec) {
+      return res.status(400).send('Invalid start or duration')
+    }
+
+    res.setHeader('Content-Type', 'application/octet-stream')
+    res.setHeader('Cache-Control', 'private, no-store')
+    const decoder = TranscriptManager.decodeAudioPart(audioFile.metadata.path, start, duration)
+    decoder.on('error', (error) => {
+      if (req.destroyed) return
+      Logger.error(`[LibraryItemController] Failed to decode "${audioFile.metadata.path}" for transcription`, error.message)
+      if (!res.headersSent) res.sendStatus(500)
+      else res.destroy()
+    })
+    // Stop decoding when the browser cancels the request
+    res.on('close', () => {
+      if (!res.writableFinished) decoder.kill('SIGKILL')
+    })
+    decoder.pipe(res, { end: true })
+  }
+
+  /**
    *
    * @param {RequestWithUser} req
    * @param {Response} res

@@ -146,6 +146,7 @@
 
     <modals-podcast-episode-feed v-model="showPodcastEpisodeFeed" :library-item="libraryItem" :episodes="podcastFeedEpisodes" :download-queue="episodeDownloadsQueued" :episodes-downloading="episodesDownloading" />
     <modals-bookmarks-modal v-model="showBookmarksModal" :bookmarks="bookmarks" :playback-rate="1" :library-item-id="libraryItemId" hide-create @select="selectBookmark" />
+    <modals-transcript-setup-modal v-model="showTranscriptSetup" :library-item="libraryItem" :mode="transcriptSetupMode" @start="startBrowserTranscript" />
   </div>
 </template>
 
@@ -185,7 +186,9 @@ export default {
       episodeDownloadsQueued: [],
       showBookmarksModal: false,
       isDescriptionClamped: false,
-      showFullDescription: false
+      showFullDescription: false,
+      showTranscriptSetup: false,
+      transcriptSetupMode: 'whisper'
     }
   },
   computed: {
@@ -834,6 +837,12 @@ export default {
       this.$store.commit('globals/setConfirmPrompt', payload)
     },
     async startTranscriptJob(mode) {
+      if (this.$store.getters['transcripts/getEngine'] === 'browser') {
+        // Checks the GPU and the speech model, then starts in this page
+        this.transcriptSetupMode = mode
+        this.showTranscriptSetup = true
+        return
+      }
       // The helper downloads audio from the same server address the browser uses
       const absBaseUrl = process.env.NODE_ENV === 'development' ? process.env.serverUrl : `${window.location.origin}${this.$config.routerBasePath}`
       try {
@@ -842,6 +851,9 @@ export default {
         console.error('Failed to start transcript job', error)
         this.$toast.error(error.message)
       }
+    },
+    startBrowserTranscript({ mode, language, precision }) {
+      this.$store.dispatch('transcripts/startJob', { libraryItem: this.libraryItem, mode, language, precision })
     },
     cancelTranscriptJob() {
       this.$store.dispatch('transcripts/cancelJob', this.libraryItemId)
@@ -874,7 +886,7 @@ export default {
   mounted() {
     this.checkDescriptionClamped()
 
-    if (this.isBook && this.userCanUpdate) {
+    if (this.isBook && this.userCanUpdate && this.$store.getters['transcripts/getEngine'] === 'helper') {
       this.$store.dispatch('transcripts/checkHelper')
     }
 

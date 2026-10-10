@@ -19,6 +19,8 @@ export const state = () => ({
     authorSortDesc: false,
     jumpForwardAmount: 10,
     jumpBackwardAmount: 10,
+    // 'browser': speech recognition on this computer's GPU in the page (WebGPU); 'helper': the local transcribe helper
+    transcriptEngine: 'browser',
     transcriptHelperUrl: 'http://127.0.0.1:8765',
     showTranscriptPanel: false,
     transcriptFontScale: 1

@@ -1,20 +1,31 @@
 import Vue from 'vue'
+import { BrowserTranscription, clearCachedParts } from '@/players/browserTranscriber'
 import { buildHelperJobFiles, normalizeHelperUrl } from '@/players/transcriptUtils'
 
 /**
- * Read-along transcripts: talks to the local transcribe helper (tools/transcribe-helper) and uploads
- * finished transcripts to the server. Jobs live here (not in a page) so they keep running while
- * navigating, and are reconnected after a page reload (job ids are kept in localStorage).
+ * Read-along transcripts: created in this page on the user's GPU (engine "browser", players/browserTranscriber.js)
+ * or by the local transcribe helper (engine "helper", tools/transcribe-helper), then uploaded to the server.
+ * Jobs live here (not in a page) so they keep running while navigating. Helper jobs are reconnected after a
+ * page reload (job ids are kept in localStorage); browser jobs continue from their cached parts when started again.
  */
 
 const JOBS_STORAGE_KEY = 'transcriptJobs'
 const POLL_INTERVAL_MS = 1500
 const HEALTH_CACHE_MS = 10000
-const ACTIVE_STATUSES = ['submitting', 'downloading', 'queued', 'transcribing', 'aligning', 'uploading']
+const ACTIVE_STATUSES = ['submitting', 'preparing', 'loading', 'downloading', 'queued', 'transcribing', 'aligning', 'uploading']
 const HELPER_STATUSES = ['downloading', 'queued', 'transcribing', 'aligning']
 
 let pollTimer = null
 let pollInFlight = false
+/** libraryItemId -> BrowserTranscription running in this page */
+const browserJobs = new Map()
+
+function warnBeforeLeaving(event) {
+  if (!browserJobs.size) return
+  // Closing the page stops transcription in the browser
+  event.preventDefault()
+  event.returnValue = ''
+}
 
 class HelperError extends Error {
   constructor(message, code) {
@@ -100,16 +111,17 @@ export const state = () => ({
 })
 
 export const getters = {
+  getEngine: (state, getters, rootState, rootGetters) => (rootGetters['user/getUserSetting']('transcriptEngine') === 'helper' ? 'helper' : 'browser'),
   getHelperUrl: (state, getters, rootState, rootGetters) => normalizeHelperUrl(rootGetters['user/getUserSetting']('transcriptHelperUrl')),
   getIsHelperAvailable: (state) => state.helper.available,
-  /** Reachable and the model loaded (or loading) on the GPU */
-  getCanCreateTranscripts: (state) => state.helper.available && state.helper.health?.modelState !== 'error',
+  /** In the browser the setup dialog checks the GPU; the helper must be reachable with its model loaded (or loading) */
+  getCanCreateTranscripts: (state, getters) => getters.getEngine === 'browser' || (state.helper.available && state.helper.health?.modelState !== 'error'),
   getJob: (state) => (libraryItemId) => state.jobs[libraryItemId] || null,
   getIsJobActive: (state) => (libraryItemId) => ACTIVE_STATUSES.includes(state.jobs[libraryItemId]?.status)
 }
 
 export const actions = {
-  init({ commit, dispatch }) {
+  init({ commit, dispatch, getters }) {
     let persisted = {}
     try {
       persisted = JSON.parse(localStorage.getItem(JOBS_STORAGE_KEY) || '{}') || {}
@@ -119,7 +131,8 @@ export const actions = {
     for (const [libraryItemId, job] of Object.entries(persisted)) {
       commit('setJob', { libraryItemId, ...job, status: 'downloading', progress: 0, downloadProgress: 0, reconnecting: true })
     }
-    dispatch('checkHelper', true)
+    // Only ping the helper when it is used (browsers may ask permission to reach this computer)
+    if (getters.getEngine === 'helper' || Object.keys(persisted).length) dispatch('checkHelper', true)
     if (Object.keys(persisted).length) dispatch('startPolling')
   },
   async checkHelper({ state, commit, getters }, force = false) {
@@ -142,7 +155,8 @@ export const actions = {
    * @param {{ libraryItem: Object, absBaseUrl: string, mode?: 'whisper' | 'ebook' }} payload
    * mode "ebook" uses the item's EPUB text, aligned to the audio (an existing Whisper transcript is reused if possible)
    */
-  async startJob({ state, commit, dispatch, getters, rootGetters }, { libraryItem, absBaseUrl, mode = 'whisper' }) {
+  async startJob({ state, commit, dispatch, getters, rootGetters }, { libraryItem, absBaseUrl, mode = 'whisper', language = null, precision = 'fp16' }) {
+    if (getters.getEngine === 'browser') return dispatch('startBrowserJob', { libraryItem, mode, language, precision })
     const helperUrl = getters.getHelperUrl
     const libraryItemId = libraryItem.id
     const request = {
@@ -174,10 +188,51 @@ export const actions = {
       throw error
     }
   },
+  /**
+   * Transcribe in this page on the GPU (runs while the page stays open, also when navigating in it)
+   * @param {{ libraryItem: Object, mode: 'whisper' | 'ebook', language: string|null, precision: string }} payload
+   */
+  startBrowserJob({ commit, dispatch }, { libraryItem, mode, language, precision }) {
+    const libraryItemId = libraryItem.id
+    if (browserJobs.has(libraryItemId)) return
+    const title = libraryItem.media?.metadata?.title || ''
+    commit('setJob', { libraryItemId, engine: 'browser', title, status: 'preparing', progress: 0 })
+    const job = new BrowserTranscription({
+      libraryItem,
+      mode,
+      language,
+      precision,
+      workerUrl: `${this.$config.routerBasePath}/transcriber/worker.js`,
+      axios: this.$axios,
+      version: this.$config.version,
+      onUpdate: (values) => commit('updateJob', { libraryItemId, ...values })
+    })
+    browserJobs.set(libraryItemId, job)
+    if (browserJobs.size === 1) window.addEventListener('beforeunload', warnBeforeLeaving)
+    const finished = () => {
+      browserJobs.delete(libraryItemId)
+      if (!browserJobs.size) window.removeEventListener('beforeunload', warnBeforeLeaving)
+    }
+    job
+      .run()
+      .then(async (transcript) => {
+        finished()
+        if (await dispatch('uploadTranscript', { libraryItemId, text: JSON.stringify(transcript), title })) clearCachedParts(libraryItemId)
+      })
+      .catch((error) => {
+        finished()
+        if (error.code === 'cancelled') return
+        console.error('[transcripts] Transcription in the browser failed', error)
+        commit('updateJob', { libraryItemId, status: 'error', error: error.message, errorCode: error.code })
+        toast('error', getString('ToastTranscriptFailed', [error.message]))
+      })
+  },
   async cancelJob({ state, commit }, libraryItemId) {
     const job = state.jobs[libraryItemId]
     if (!job) return
-    if (job.jobId && job.status !== 'uploading') {
+    if (job.engine === 'browser') {
+      browserJobs.get(libraryItemId)?.cancel()
+    } else if (job.jobId && job.status !== 'uploading') {
       try {
         await helperFetch(`${job.helperUrl}/jobs/${job.jobId}`, { method: 'DELETE' })
       } catch (error) {
@@ -269,14 +324,28 @@ export const actions = {
       toast('error', getString('ToastTranscriptFailed', [error.message]))
     }
   },
-  async uploadResult({ state, commit }, libraryItemId) {
+  async uploadResult({ state, commit, dispatch }, libraryItemId) {
     const job = state.jobs[libraryItemId]
     if (!job || job.uploadStarted) return
     commit('updateJob', { libraryItemId, status: 'uploading', uploadStarted: true })
+    let text
     try {
       const response = await helperFetch(`${job.helperUrl}/jobs/${job.jobId}/result`, {}, 120000)
       if (!response.ok) throw await readHelperError(response)
-      const text = await response.text()
+      text = await response.text()
+    } catch (error) {
+      console.error('[transcripts] Failed to get the transcript from the helper', error)
+      commit('updateJob', { libraryItemId, status: 'error', errorCode: 'upload_failed', error: error.message, uploadStarted: false })
+      persistJobs(state)
+      toast('error', getString('ToastTranscriptUploadFailed', [error.message]))
+      return
+    }
+    await dispatch('uploadTranscript', { libraryItemId, text, title: job.title })
+  },
+  /** @returns {Promise<boolean>} uploaded */
+  async uploadTranscript({ state, commit }, { libraryItemId, text, title }) {
+    commit('updateJob', { libraryItemId, status: 'uploading', uploadStarted: true })
+    try {
       const { blob, filename } = await gzipText(text)
       const formData = new FormData()
       formData.append('transcript', blob, filename)
@@ -284,7 +353,8 @@ export const actions = {
 
       commit('removeJob', libraryItemId)
       persistJobs(state)
-      toast('success', job.title ? `${getString('ToastTranscriptCreated')}: ${job.title}` : getString('ToastTranscriptCreated'))
+      toast('success', title ? `${getString('ToastTranscriptCreated')}: ${title}` : getString('ToastTranscriptCreated'))
+      return true
     } catch (error) {
       console.error('[transcripts] Upload failed', error)
       let message = error.response?.data || error.message
@@ -292,6 +362,7 @@ export const actions = {
       commit('updateJob', { libraryItemId, status: 'error', errorCode: 'upload_failed', error: message, uploadStarted: false })
       persistJobs(state)
       toast('error', getString('ToastTranscriptUploadFailed', [message]))
+      return false
     }
   }
 }

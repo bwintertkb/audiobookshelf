@@ -17,7 +17,10 @@
       <div class="flex items-center mb-4">
         <ui-select-input v-model="playbackRateIncrementDecrement" :label="$strings.LabelPlaybackRateIncrementDecrement" menuMaxHeight="250px" :items="playbackRateIncrementDecrementValues" @input="setPlaybackRateIncrementDecrementAmount" />
       </div>
-      <div class="mb-4">
+      <div class="flex items-center mb-4">
+        <ui-select-input v-model="transcriptEngine" :label="$strings.LabelTranscriptEngine" :items="transcriptEngineValues" @input="setTranscriptEngine" />
+      </div>
+      <div v-if="transcriptEngine === 'helper'" class="mb-4">
         <div class="flex items-end">
           <ui-text-input-with-label v-model.trim="transcriptHelperUrl" :label="$strings.LabelTranscriptHelperUrl" :note="$strings.LabelTranscriptHelperUrlNote" class="grow" @blur="setTranscriptHelperUrl" />
           <ui-btn small class="ml-2 h-9" :loading="transcriptHelper.checking" @click="setTranscriptHelperUrl">{{ $strings.ButtonTest }}</ui-btn>
@@ -50,12 +53,17 @@ export default {
       jumpBackwardAmount: 10,
       playbackRateIncrementDecrementValues: [0.1, 0.05],
       playbackRateIncrementDecrement: 0.1,
+      transcriptEngine: 'browser',
+      transcriptEngineValues: [
+        { text: this.$strings.LabelTranscriptEngineBrowser, value: 'browser' },
+        { text: this.$strings.LabelTranscriptEngineHelper, value: 'helper' }
+      ],
       transcriptHelperUrl: ''
     }
   },
   watch: {
     show(val) {
-      if (val) this.$store.dispatch('transcripts/checkHelper')
+      if (val && this.transcriptEngine === 'helper') this.$store.dispatch('transcripts/checkHelper')
     }
   },
   computed: {
@@ -95,6 +103,11 @@ export default {
       this.playbackRateIncrementDecrement = val
       this.$store.dispatch('user/updateUserSettings', { playbackRateIncrementDecrement: val })
     },
+    setTranscriptEngine(val) {
+      this.transcriptEngine = val
+      this.$store.dispatch('user/updateUserSettings', { transcriptEngine: val })
+      if (val === 'helper') this.$store.dispatch('transcripts/checkHelper', true)
+    },
     async setTranscriptHelperUrl() {
       const url = normalizeHelperUrl(this.transcriptHelperUrl)
       this.transcriptHelperUrl = url
@@ -106,6 +119,7 @@ export default {
       this.jumpForwardAmount = this.$store.getters['user/getUserSetting']('jumpForwardAmount')
       this.jumpBackwardAmount = this.$store.getters['user/getUserSetting']('jumpBackwardAmount')
       this.playbackRateIncrementDecrement = this.$store.getters['user/getUserSetting']('playbackRateIncrementDecrement')
+      this.transcriptEngine = this.$store.getters['transcripts/getEngine']
       this.transcriptHelperUrl = this.$store.getters['transcripts/getHelperUrl']
     }
   },

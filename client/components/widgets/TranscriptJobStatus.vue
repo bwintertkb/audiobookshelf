@@ -33,19 +33,27 @@ export default {
       return this.job.status === 'error'
     },
     canCancel() {
-      return ['downloading', 'queued', 'transcribing'].includes(this.job.status)
+      return ['preparing', 'loading', 'downloading', 'queued', 'transcribing', 'aligning'].includes(this.job.status)
     },
     progressPercent() {
-      const value = this.job.status === 'downloading' ? this.job.downloadProgress : this.job.progress
+      const value = this.job.status === 'downloading' ? this.job.downloadProgress : this.job.status === 'loading' ? this.job.modelProgress : this.job.progress
       return Math.round(Math.min(1, Math.max(0, value || 0)) * 100)
     },
+    /** The speech model is being downloaded (the first time, in the browser) */
+    isDownloadingModel() {
+      return this.job.status === 'loading' && this.job.modelProgress > 0 && this.job.modelProgress < 1
+    },
     showProgressBar() {
-      return ['downloading', 'transcribing'].includes(this.job.status)
+      return ['downloading', 'transcribing'].includes(this.job.status) || this.isDownloadingModel
     },
     statusText() {
       switch (this.job.status) {
         case 'submitting':
           return this.$strings.LabelTranscriptStatusStarting
+        case 'preparing':
+          return this.$strings.LabelTranscriptStatusPreparing
+        case 'loading':
+          return this.isDownloadingModel ? `${this.$strings.LabelTranscriptStatusLoadingModel} ${this.progressPercent}%` : this.$strings.LabelTranscriptStatusLoadingModel
         case 'downloading':
           return `${this.$strings.LabelTranscriptStatusDownloading} ${this.progressPercent}%`
         case 'queued':
@@ -64,8 +72,10 @@ export default {
     },
     detailText() {
       if (this.job.helperUnreachable) return this.$strings.MessageTranscriptHelperUnreachableRetrying
+      if (this.job.engine === 'browser' && ['preparing', 'loading'].includes(this.job.status)) return this.$strings.MessageTranscriptKeepPageOpen
       if (this.job.status !== 'transcribing') return null
       const parts = []
+      if (this.job.engine === 'browser' && this.job.workers) parts.push(this.$getString('LabelTranscriptGpuWorkers', [this.job.workers]))
       if (this.job.numFiles > 1 && this.job.currentFileIndex !== null && this.job.currentFileIndex !== undefined) {
         parts.push(this.$getString('LabelTranscriptFileXOfY', [this.job.currentFileIndex + 1, this.job.numFiles]))
       }

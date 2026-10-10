@@ -265,6 +265,74 @@ describe('LibraryItemController transcripts', () => {
     expect(await fs.pathExists(transcriptPath)).to.be.false
   })
 
+  describe('audio for speech recognition in the browser', () => {
+    const TranscriptManager = require('../../../server/managers/TranscriptManager')
+    const { EventEmitter } = require('events')
+
+    function fakeDecoder() {
+      const decoder = new EventEmitter()
+      decoder.pipe = sinon.spy((destination) => {
+        decoder.destination = destination
+        return destination
+      })
+      decoder.kill = sinon.spy()
+      return decoder
+    }
+
+    function streamRes() {
+      const res = new PassThrough()
+      res.headers = {}
+      res.setHeader = (name, value) => (res.headers[name.toLowerCase()] = value)
+      res.status = sinon.spy((code) => {
+        res.statusCode = code
+        return res
+      })
+      res.send = sinon.spy(() => res)
+      res.sendStatus = sinon.spy((code) => {
+        res.statusCode = code
+        return res
+      })
+      return res
+    }
+
+    async function getAudio(query, { fileid = 'ino2', reqUser = user } = {}) {
+      const req = { params: { id: libraryItemId, fileid }, query, user: reqUser, libraryItem: await getItem() }
+      const res = streamRes()
+      await LibraryItemController.getTranscriptAudio.bind(apiRouter)(req, res)
+      return res
+    }
+
+    it('streams the requested part of an audio file decoded to 16 kHz mono PCM', async () => {
+      const decoder = fakeDecoder()
+      const decode = sinon.stub(TranscriptManager, 'decodeAudioPart').returns(decoder)
+      const res = await getAudio({ start: '12.5', duration: '120' })
+      expect(decode.calledOnceWith('/test/book/ino2.mp3', 12.5, 120)).to.be.true
+      expect(decoder.pipe.calledOnce).to.be.true
+      expect(decoder.destination).to.equal(res)
+      expect(res.headers['content-type']).to.equal('application/octet-stream')
+      expect(res.sendStatus.called).to.be.false
+    })
+
+    it('stops decoding when the browser cancels the request', async () => {
+      const decoder = fakeDecoder()
+      sinon.stub(TranscriptManager, 'decodeAudioPart').returns(decoder)
+      const res = await getAudio({ start: '0', duration: '60' })
+      res.destroy()
+      await new Promise((resolve) => setImmediate(resolve))
+      expect(decoder.kill.calledOnceWith('SIGKILL')).to.be.true
+    })
+
+    it('rejects invalid ranges, unknown files and users who cannot create transcripts', async () => {
+      const decode = sinon.stub(TranscriptManager, 'decodeAudioPart').returns(fakeDecoder())
+      for (const query of [{ start: '-1', duration: '10' }, { start: '0', duration: '0' }, { start: 'abc', duration: '10' }, { start: '0', duration: String(TranscriptManager.MaxAudioPartSec + 1) }, {}]) {
+        expect((await getAudio(query)).status.calledWith(400), JSON.stringify(query)).to.be.true
+      }
+      expect((await getAudio({ start: '0', duration: '10' }, { fileid: 'nope' })).sendStatus.calledWith(404)).to.be.true
+      expect((await getAudio({ start: '0', duration: '10' }, { reqUser: { username: 'guest', canUpdate: false } })).sendStatus.calledWith(403)).to.be.true
+      expect(decode.called).to.be.false
+    })
+  })
+
   describe('middleware permissions', () => {
     async function runMiddleware(method, reqUser) {
       const req = { params: { id: libraryItemId }, method, path: `/items/${libraryItemId}/transcript`, user: { checkCanAccessLibraryItem: () => true, ...reqUser } }
