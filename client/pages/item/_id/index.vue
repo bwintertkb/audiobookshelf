@@ -147,6 +147,7 @@
     <modals-podcast-episode-feed v-model="showPodcastEpisodeFeed" :library-item="libraryItem" :episodes="podcastFeedEpisodes" :download-queue="episodeDownloadsQueued" :episodes-downloading="episodesDownloading" />
     <modals-bookmarks-modal v-model="showBookmarksModal" :bookmarks="bookmarks" :playback-rate="1" :library-item-id="libraryItemId" hide-create @select="selectBookmark" />
     <modals-transcript-setup-modal v-model="showTranscriptSetup" :library-item="libraryItem" :mode="transcriptSetupMode" @start="startBrowserTranscript" />
+    <input ref="ebookFileInput" type="file" accept=".epub,.pdf,.mobi,.azw3,.cbr,.cbz" class="hidden" @change="ebookFileSelected" />
   </div>
 </template>
 
@@ -355,6 +356,10 @@ export default {
     userCanDelete() {
       return this.$store.getters['user/getUserCanDelete']
     },
+    /** Add an ebook (e.g. the EPUB to create a transcript from) to the book's folder */
+    canUploadEbook() {
+      return this.isBook && !this.isFile && this.userCanUpdate && this.$store.getters['user/getUserCanUpload']
+    },
     userCanDownload() {
       return this.$store.getters['user/getUserCanDownload']
     },
@@ -440,6 +445,13 @@ export default {
         items.push({
           text: this.$strings.LabelShare,
           action: 'share'
+        })
+      }
+
+      if (this.canUploadEbook) {
+        items.push({
+          text: this.$strings.ButtonUploadEbook,
+          action: 'upload-ebook'
         })
       }
 
@@ -823,6 +835,9 @@ export default {
         this.createTranscriptClick('ebook')
       } else if (action === 'delete-transcript') {
         this.deleteTranscriptClick()
+      } else if (action === 'upload-ebook') {
+        this.$refs.ebookFileInput.value = ''
+        this.$refs.ebookFileInput.click()
       }
     },
     createTranscriptClick(mode) {
@@ -850,6 +865,26 @@ export default {
       } catch (error) {
         console.error('Failed to start transcript job', error)
         this.$toast.error(error.message)
+      }
+    },
+    async ebookFileSelected(event) {
+      const file = event.target.files?.[0]
+      if (!file) return
+      const formData = new FormData()
+      formData.append('ebook', file)
+      const hadEbook = !!this.ebookFile
+      const toastId = this.$toast.info(this.$getString('ToastEbookUploading', [file.name]), { timeout: false })
+      try {
+        const libraryItem = await this.$axios.$post(`/api/items/${this.libraryItemId}/ebook`, formData)
+        this.libraryItemUpdated(libraryItem)
+        // The first ebook of a book becomes its main ebook
+        const isPrimary = !hadEbook && !!libraryItem.media?.ebookFile
+        this.$toast.success(this.$getString(isPrimary ? 'ToastEbookUploaded' : 'ToastEbookUploadedSupplementary', [file.name]))
+      } catch (error) {
+        console.error('Failed to upload ebook', error)
+        this.$toast.error(this.$getString('ToastEbookUploadFailed', [error.response?.data || error.message]))
+      } finally {
+        this.$toast.dismiss(toastId)
       }
     },
     startBrowserTranscript({ mode, language, precision }) {

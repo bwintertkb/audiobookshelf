@@ -45,7 +45,7 @@ The Python helper in [`tools/transcribe-helper`](../tools/transcribe-helper/READ
 
 ## Use the book's own text (EPUB)
 
-If the book also has an EPUB in ABS (put the `.epub` in the book's folder; the book page then shows **Read**), choose **Create transcript from ebook** in the **⋮** menu. The words are still timed with Whisper on your GPU, then the EPUB's text is lined up with the narration:
+If the book also has an EPUB in ABS, choose **Create transcript from ebook** in the **⋮** menu. To add one, choose **Upload ebook** in the same menu and pick the `.epub` on your computer (users who can upload and edit; it is saved in the book's folder and the book page then shows **Read**), or put the file in the book's folder yourself. The words are still timed with Whisper on your GPU, then the EPUB's text is lined up with the narration:
 
 - The transcript shows the book's real text: spelling, punctuation, quotes, paragraphs and chapter headings.
 - Text that is not read aloud (title pages, contents, copyright and license pages, captions, footnotes) is left out; speech that is not in the book (narrator intros, "Chapter two of …" announcements) simply has no text.
@@ -91,6 +91,7 @@ Transcripts are stored gzipped at `<metadata>/items/<libraryItemId>/transcript.j
 | GET    | `/api/items/:id/transcript` | the transcript JSON (served `Content-Encoding: gzip`, with ETag/304); 404 if none                                                                                                    |
 | POST   | `/api/items/:id/transcript` | upload or replace: multipart file field `transcript` (gzipped or plain JSON), or a JSON body (JSON bodies are limited to 10 MB by the server, so use the file upload for long books) |
 | DELETE | `/api/items/:id/transcript` | remove                                                                                                                                                                               |
+| POST   | `/api/items/:id/ebook` | add an ebook file (multipart field `ebook`: epub, pdf, mobi, azw3, cbr, cbz) to the book's folder and scan the book; the first ebook becomes the main one; requires "Can Upload" and "Can Update"; 409 if a file with that name is already there |
 | GET    | `/api/items/:id/transcript/audio/:fileid?start=<sec>&duration=<sec>` | part of an audio file (by inode) decoded with ffmpeg to raw 16 kHz mono 16-bit PCM (`s16le`), for speech recognition in the browser; at most 900 s per request; requires "Can Update" |
 
 `GET /api/items/:id?expanded=1` includes `"hasTranscript": true|false`. Uploads and deletes emit the `item_updated` socket event. Uploads are validated: `version` must be 1, `libraryItemId` must match the URL, every segment/word time must be a number within the item's playable duration (+1 s), and word start times must not decrease. Limits: 64 MB uploaded, 256 MB after decompression.

@@ -333,6 +333,52 @@ describe('LibraryItemController transcripts', () => {
     })
   })
 
+  describe('uploading an ebook to a book', () => {
+    const LibraryItemScanner = require('../../../server/scanner/LibraryItemScanner')
+    const Watcher = require('../../../server/Watcher')
+    let bookDir
+
+    beforeEach(async () => {
+      bookDir = Path.join(tempDir, 'library', 'Author', 'Book')
+      await fs.ensureDir(bookDir)
+      await Database.libraryItemModel.update({ path: bookDir }, { where: { id: libraryItemId } })
+      sinon.stub(LibraryItemScanner, 'scanLibraryItem').resolves(1)
+      sinon.stub(Watcher, 'addIgnoreDir')
+      sinon.stub(Watcher, 'removeIgnoreDir')
+    })
+
+    async function uploadEbook(name, { reqUser = { ...user, canUpload: true }, content = 'epub data' } = {}) {
+      const tempFilePath = Path.join(tempDir, `upload-${name}`)
+      await fs.writeFile(tempFilePath, content)
+      const file = { name, tempFilePath, mv: (destination) => fs.move(tempFilePath, destination) }
+      const req = { params: { id: libraryItemId }, user: reqUser, libraryItem: await getItem(), files: name ? { ebook: file } : {} }
+      const res = fakeRes()
+      await LibraryItemController.uploadEbook.bind(apiRouter)(req, res)
+      return { res, tempFilePath }
+    }
+
+    it('puts the ebook in the book folder and scans the book', async () => {
+      const { res } = await uploadEbook('The Book.epub')
+      expect(await fs.readFile(Path.join(bookDir, 'The Book.epub'), 'utf8')).to.equal('epub data')
+      expect(LibraryItemScanner.scanLibraryItem.calledOnceWith(libraryItemId)).to.be.true
+      expect(Watcher.addIgnoreDir.calledWith(bookDir)).to.be.true
+      expect(Watcher.removeIgnoreDir.calledWith(bookDir)).to.be.true
+      expect(res.body.id).to.equal(libraryItemId)
+    })
+
+    it('rejects missing and unsupported files, files already in the folder and users who cannot upload', async () => {
+      expect((await uploadEbook(null)).res.statusCode).to.equal(400)
+      const unsupported = await uploadEbook('notes.txt')
+      expect(unsupported.res.statusCode).to.equal(400)
+      expect(await fs.pathExists(unsupported.tempFilePath)).to.be.false
+      await fs.writeFile(Path.join(bookDir, 'Existing.epub'), 'old')
+      expect((await uploadEbook('Existing.epub')).res.statusCode).to.equal(409)
+      expect(await fs.readFile(Path.join(bookDir, 'Existing.epub'), 'utf8')).to.equal('old')
+      expect((await uploadEbook('New.epub', { reqUser: { ...user, canUpload: false } })).res.statusCode).to.equal(403)
+      expect(LibraryItemScanner.scanLibraryItem.called).to.be.false
+    })
+  })
+
   describe('middleware permissions', () => {
     async function runMiddleware(method, reqUser) {
       const req = { params: { id: libraryItemId }, method, path: `/items/${libraryItemId}/transcript`, user: { checkCanAccessLibraryItem: () => true, ...reqUser } }

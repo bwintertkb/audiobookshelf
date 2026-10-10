@@ -11,7 +11,9 @@ const Database = require('../Database')
 const zipHelpers = require('../utils/zipHelpers')
 const { reqSupportsWebp, clampPositiveInt } = require('../utils/index')
 const { ScanResult, AudioMimeType } = require('../utils/constants')
-const { getAudioMimeTypeFromExtname, encodeUriPath } = require('../utils/fileUtils')
+const { getAudioMimeTypeFromExtname, encodeUriPath, sanitizeFilename } = require('../utils/fileUtils')
+const globals = require('../utils/globals')
+const Watcher = require('../Watcher')
 const LibraryItemScanner = require('../scanner/LibraryItemScanner')
 const AudioFileScanner = require('../scanner/AudioFileScanner')
 const Scanner = require('../scanner/Scanner')
@@ -1153,6 +1155,60 @@ class LibraryItemController {
       Logger.error(`[LibraryItemController] Failed to download ebook file "${ebookFilePath}"`, error)
       LibraryItemController.handleDownloadError(error, res)
     }
+  }
+
+  /**
+   * POST api/items/:id/ebook
+   * Add an ebook file (multipart field "ebook") to the folder of a book and scan the book.
+   * The first ebook of a book becomes its primary ebook (readable, usable for transcripts), later ones are supplementary.
+   *
+   * @param {LibraryItemControllerRequest} req
+   * @param {Response} res
+   */
+  async uploadEbook(req, res) {
+    const file = req.files?.ebook
+    const removeTempFile = () => (file?.tempFilePath ? fs.remove(file.tempFilePath).catch(() => {}) : null)
+    if (!req.user.canUpload || !req.user.canUpdate) {
+      Logger.warn(`[LibraryItemController] User "${req.user.username}" attempted to upload an ebook without permission`)
+      await removeTempFile()
+      return res.sendStatus(403)
+    }
+    if (!file || Array.isArray(file)) {
+      await removeTempFile()
+      return res.status(400).send('No ebook file')
+    }
+    if (!req.libraryItem.isBook || req.libraryItem.isFile) {
+      await removeTempFile()
+      return res.status(400).send('Ebooks can only be added to books that have their own folder')
+    }
+    const filename = sanitizeFilename(file.name || '')
+    const extension = Path.extname(filename).slice(1).toLowerCase()
+    if (!filename || Path.basename(filename) !== filename || !globals.SupportedEbookTypes.includes(extension)) {
+      await removeTempFile()
+      return res.status(400).send(`Unsupported ebook file (${globals.SupportedEbookTypes.join(', ')})`)
+    }
+    const destination = Path.join(req.libraryItem.path, filename)
+    if (await fs.pathExists(destination)) {
+      await removeTempFile()
+      return res.status(409).send(`"${filename}" is already in the book's folder`)
+    }
+
+    // The book is scanned right away, the folder watcher does not need to pick the file up
+    Watcher.addIgnoreDir(req.libraryItem.path)
+    try {
+      await file.mv(destination)
+      Logger.info(`[LibraryItemController] Added ebook "${filename}" to "${req.libraryItem.media.title}"`)
+      await LibraryItemScanner.scanLibraryItem(req.libraryItem.id)
+    } catch (error) {
+      Logger.error(`[LibraryItemController] Failed to add ebook "${filename}" to "${req.libraryItem.media.title}"`, error)
+      await removeTempFile()
+      return res.status(500).send('Failed to add the ebook')
+    } finally {
+      Watcher.removeIgnoreDir(req.libraryItem.path)
+    }
+
+    const libraryItem = await Database.libraryItemModel.getExpandedById(req.libraryItem.id)
+    res.json(libraryItem.toOldJSONExpanded())
   }
 
   /**
