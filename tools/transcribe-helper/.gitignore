@@ -6,3 +6,5 @@ config.toml
 tests/fixtures/audio/
 *.part
 tests/fixtures/ebooks/
+
+app-settings.json

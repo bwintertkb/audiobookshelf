@@ -161,7 +161,8 @@ describe('LibraryItemController transcripts', () => {
     const libraryItem = await getItem()
     expect(libraryItem.extraData.transcript.numWords).to.equal(4)
     expect(libraryItem.toOldJSONExpanded().hasTranscript).to.be.true
-    expect(libraryItem.toOldJSONMinified()).to.not.have.property('hasTranscript')
+    // Also in book lists (the transcriber app lists books without a transcript)
+    expect(libraryItem.toOldJSONMinified().hasTranscript).to.be.true
     expect(SocketAuthority.libraryItemEmitter.calledWith('item_updated')).to.be.true
   })
 

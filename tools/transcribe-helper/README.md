@@ -3,7 +3,8 @@
 **Optional.** The ABS web client creates transcripts by itself, on your GPU in the browser (WebGPU), with
 nothing to install; see [`docs/transcripts.md`](../../docs/transcripts.md). This helper is the faster
 alternative (about 3x) for people who want to run a local Python service; select it in the web player's
-**Player settings → Create transcripts with → Transcribe helper (advanced)**.
+**Player settings → Create transcripts with → Transcribe helper (advanced)**. The [transcriber app](#transcriber-app-windows)
+does it without the web page: pick books on your server, it transcribes and uploads them.
 
 A small local service that creates read-along transcripts for Audiobookshelf books on **your own GPU**.
 The ABS web client sends it a job, the helper downloads the book's audio from your ABS server,
@@ -13,6 +14,33 @@ transcript back to the browser, which uploads it to ABS. Nothing runs on the ABS
 - Listens on `127.0.0.1` only (default port `8765`).
 - One GPU job at a time; further jobs queue. The model stays loaded between jobs.
 - Your ABS access token is kept in memory only while audio is downloading, and is never logged or written to disk.
+
+## Transcriber app (Windows)
+
+A window that does the whole job without the web page: it lists the books on your server, transcribes the ones
+you pick on this computer's GPU and uploads their transcripts.
+
+1. Do the setup below (`.venv` with `requirements.txt`; `check_gpu.py` should end with `OK`).
+2. Double-click **`ABS Transcriber.bat`** (or run `.\.venv\Scripts\python transcriber_app.py`).
+3. Enter the server address (e.g. `http://192.168.0.240:13378` on the home network, or
+   `https://books.example.com/audiobookshelf`), your user name and password, and press **Sign in**. The user must
+   be allowed to update books (admins are).
+4. The **Books** list shows every book with its length, ebook format and whether it has a transcript (**Only books
+   without a transcript** hides the others; search by title or author).
+5. Select one or more books (Ctrl/Shift-click) and press **Transcribe selected** (or double-click a book).
+   - **Use the ebook's text when the book has an EPUB** (on by default): the transcript uses the EPUB's text,
+     timed by the speech, for read-along in the ebook reader. Without an EPUB the recognized speech is used.
+   - **Language**: the book's metadata language (detected from the audio when it has none), detection, or a
+     fixed language.
+6. The queue transcribes one book at a time; the next book's audio is downloaded meanwhile. For each book:
+   download the audio → transcribe (progress, speed, time remaining) → upload the transcript → **delete the
+   downloaded audio**. **Cancel** stops a book, **Retry** repeats a failed one (files that were finished are not
+   transcribed again; a failed upload is retried without transcribing).
+
+The password and the server's tokens are only kept in memory while the app runs. `app-settings.json` (next to
+the app, not committed) remembers the server address, user name and options. A transcript that could not be
+uploaded is kept in `cache/app/pending-uploads` and uploaded the next time you sign in; audio left behind by an
+app that was closed while downloading is deleted when it starts. The log is in `cache/transcriber-app.log`.
 
 ## Everything runs locally on your GPU
 

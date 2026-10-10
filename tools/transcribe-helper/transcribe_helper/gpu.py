@@ -23,6 +23,7 @@ def query_nvidia_smi():
             capture_output=True,
             text=True,
             timeout=15,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),  # no console flashing up from the windowed app
         )
     except (OSError, subprocess.SubprocessError):
         return []
