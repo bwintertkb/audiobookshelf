@@ -729,6 +729,7 @@
   "LabelTranscriptModelDownloading": "Downloading… {0}%",
   "LabelTranscriptSearch": "Search transcript",
   "LabelTranscriptSearchResults": "{0} of {1}",
+  "LabelTranscriptSpeed": "{0}x real time",
   "LabelTranscriptStatusAligning": "Transcript: matching the ebook text",
   "LabelTranscriptStatusDownloading": "Transcript: downloading audio",
   "LabelTranscriptStatusLoadingModel": "Transcript: loading the speech model",

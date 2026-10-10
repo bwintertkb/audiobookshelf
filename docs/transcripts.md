@@ -17,14 +17,14 @@ Everything happens in the Audiobookshelf web page: speech recognition runs on th
 
 - A browser with WebGPU: Chrome or Edge 113+, Firefox 141+ (Windows). Hardware acceleration must be on.
 - ABS opened over HTTPS (or on the same computer as `localhost`): browsers only allow the GPU on secure pages. `http://<LAN address>` does not work.
-- A GPU with enough memory; it is used by up to 8 workers at a time (fewer on smaller GPUs).
+- A GPU with enough memory: each worker holds its own copy of the model (about 4.5 GB with fp16). Workers are added one at a time while each one makes transcription at least 5% faster, up to 8. A worker that makes it slower (the GPU memory is full and has to be swapped) is removed again, as is one when the speed later falls a lot (e.g. a game starts).
 - About 1.6 GB of browser storage for the speech model (0.8 GB on GPUs without 16-bit float support, which use a smaller model).
 
 Nothing has to be installed: the first time, the setup dialog downloads the model from Hugging Face into the browser.
 
 ## Use
 
-- **Create**: on a book's page open the **⋮** menu and choose **Create transcript** (shown to users who can edit items). A dialog checks this computer: secure page, GPU (with its name), speech model (with a **Download** button the first time, about a minute on a fast connection) and storage space, and says what is missing. Pick the language (preselected from the book's metadata, or detected automatically) and press **Start**. Progress, the number of GPU workers and the time remaining are shown on the page.
+- **Create**: on a book's page open the **⋮** menu and choose **Create transcript** (shown to users who can edit items). A dialog checks this computer: secure page, GPU (with its name), speech model (with a **Download** button the first time, about a minute on a fast connection) and storage space, and says what is missing. Pick the language (preselected from the book's metadata, or detected automatically) and press **Start**. Progress, the number of GPU workers, the speed ("24x real time") and the time remaining are shown on the page. The browser console logs the speed measured for each number of workers (`[browserTranscriber] 4 workers: 23.3x real time`).
   - Keep the page open while it transcribes (you can use Audiobookshelf in it meanwhile; the browser asks before you close it). Finished parts are kept in the browser: if the page is closed, **Create transcript** continues where it stopped.
   - When it finishes the transcript is uploaded and a confirmation appears.
 - **Re-create**: **Re-create transcript** in the same menu (asks for confirmation) replaces it.
@@ -37,7 +37,7 @@ Nothing has to be installed: the first time, the setup dialog downloads the mode
   - Change the text size with the A- / A+ buttons.
   - If the book's audio files changed after the transcript was made (files added, removed or replaced), the panel warns that the highlighting may be out of sync; re-create the transcript.
 
-On an RTX 5090, transcription in the browser runs at about 30x real time with 8 workers: a 15 hour book takes about 30 minutes. Its words match the transcribe helper's (faster-whisper) for about 97% of the text, with word times within 0.1 s for three quarters of the words.
+On an RTX 5090, transcription in the browser runs at about 25–30x real time with 4–8 workers: a 15 hour book takes 30–40 minutes. It is slower when other programs or browser tabs use much of the GPU memory; keep the page visible (browsers slow down hidden tabs). Its words match the transcribe helper's (faster-whisper) for about 97% of the text, with word times within 0.1 s for three quarters of the words.
 
 ### Transcribe helper (optional)
 

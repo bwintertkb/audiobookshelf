@@ -76,6 +76,7 @@ export default {
       if (this.job.status !== 'transcribing') return null
       const parts = []
       if (this.job.engine === 'browser' && this.job.workers) parts.push(this.$getString('LabelTranscriptGpuWorkers', [this.job.workers]))
+      if (this.job.engine === 'browser' && this.job.speed) parts.push(this.$getString('LabelTranscriptSpeed', [Math.round(this.job.speed)]))
       if (this.job.numFiles > 1 && this.job.currentFileIndex !== null && this.job.currentFileIndex !== undefined) {
         parts.push(this.$getString('LabelTranscriptFileXOfY', [this.job.currentFileIndex + 1, this.job.numFiles]))
       }

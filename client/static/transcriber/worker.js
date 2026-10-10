@@ -49,6 +49,9 @@ self.onmessage = async ({ data }) => {
           if (progress.status === 'progress_total' || progress.status === 'ready') self.postMessage({ type: 'progress', progress: { status: progress.status, loaded: progress.loaded, total: progress.total, progress: progress.progress } })
         }
       })
+      // A first short run prepares the GPU programs, so the first part runs at full speed (the speed of each
+      // worker's parts decides how many workers to use)
+      await asr(new Float32Array(16000), { return_timestamps: 'word', chunk_length_s: 29, language: 'en', task: 'transcribe' })
       self.postMessage({ type: 'loaded' })
     } else if (data.type === 'transcribe') {
       const output = await asr(data.audio, {

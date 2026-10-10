@@ -8,8 +8,10 @@ import { buildTranscript, partWordsToBook, segmentsFromWords } from './transcrip
  * (GET /api/items/:id/transcript/audio/:fileid) and stores the result.
  *
  * Audio is cut into ~2 minute parts at quiet moments; several workers, each with its own copy of the model,
- * transcribe parts in parallel (a single worker leaves most of a fast GPU idle). Finished parts are kept in
- * IndexedDB, so a job interrupted by closing the page continues where it stopped the next time.
+ * transcribe parts in parallel (a single worker leaves most of a fast GPU idle). Workers are added one at a time
+ * while they make transcription faster: every worker needs GPU memory, and once it is full the GPU swaps memory
+ * and all workers get much slower. Finished parts are kept in IndexedDB, so a job interrupted by closing the page
+ * continues where it stopped the next time.
  */
 
 export const TRANSCRIBER_MODEL = 'onnx-community/whisper-large-v3-turbo_timestamped'
@@ -27,6 +29,8 @@ const PART_SEC = 120 // audio per GPU job
 const CUT_WINDOW_SEC = 10 // a part ends at the quietest moment within this distance of PART_SEC
 const CUT_FRAME = SAMPLE_RATE / 4
 const MAX_WORKERS = 8
+const MIN_WORKER_GAIN = 0.05 // a new worker stays when transcription gets at least this much faster
+const SLOWDOWN = 0.6 // one worker less when the speed falls below this share of the best (e.g. other programs need the GPU)
 const QUEUE_PER_WORKER = 2
 const DB_NAME = 'abs-transcriber'
 const DB_STORE = 'parts'
@@ -242,7 +246,13 @@ export class BrowserTranscription {
     this.cancelled = false
     this.abort = new AbortController()
     this.workers = new Set()
+    this.retiring = new Set() // workers that stop after their current part
     this.queue = null
+    // Speed measurement: audio seconds per second of each worker, over parts started in the current window
+    this.speedWindow = 0
+    this.workerSpeeds = new Map()
+    this.speedWaiter = null
+    this.speed = null
   }
 
   update(values) {
@@ -256,9 +266,78 @@ export class BrowserTranscription {
   cancel() {
     this.cancelled = true
     this.abort.abort()
-    this.queue?.close()
+    this.closeQueue()
     this.workers.forEach((worker) => worker.terminate())
     this.workers.clear()
+  }
+
+  closeQueue() {
+    this.queue?.close()
+    this.finishSpeedWindow(null)
+  }
+
+  get activeWorkers() {
+    return [...this.workers].filter((worker) => !this.retiring.has(worker))
+  }
+
+  // ------------------------------------------------------------------------------------------- speed
+  /**
+   * Audio seconds transcribed per second by all workers together, measured from now on over at least one part
+   * per worker (parts started before are left out: a worker that was just added or removed changes the speed)
+   *
+   * @returns {Promise<number|null>} null when the job ends first
+   */
+  measureSpeed() {
+    this.finishSpeedWindow(null)
+    if (this.queue.closed) return Promise.resolve(null)
+    this.newSpeedWindow()
+    return new Promise((resolve) => (this.speedWaiter = resolve))
+  }
+
+  newSpeedWindow() {
+    this.speedWindow++
+    this.workerSpeeds.clear()
+  }
+
+  finishSpeedWindow(speed) {
+    const resolve = this.speedWaiter
+    this.speedWaiter = null
+    resolve?.(speed)
+  }
+
+  recordSpeed(worker, window, audioSec, sec) {
+    if (window !== this.speedWindow || sec <= 0) return
+    const speed = this.workerSpeeds.get(worker) || { audioSec: 0, sec: 0 }
+    speed.audioSec += audioSec
+    speed.sec += sec
+    this.workerSpeeds.set(worker, speed)
+    const workers = this.activeWorkers
+    if (!this.speedWaiter || !workers.length || !workers.every((w) => this.workerSpeeds.has(w))) return
+    this.speed = workers.reduce((sum, w) => sum + this.workerSpeeds.get(w).audioSec / this.workerSpeeds.get(w).sec, 0)
+    this.finishSpeedWindow(this.speed)
+  }
+
+  addWorker(worker, runners, runWorker) {
+    this.workers.add(worker)
+    this.newSpeedWindow()
+    runners.push(runWorker(worker))
+  }
+
+  removeWorker(worker) {
+    worker.terminate()
+    this.workers.delete(worker)
+    this.retiring.delete(worker)
+    this.newSpeedWindow()
+  }
+
+  /** The newest worker stops after its current part (frees its GPU memory) */
+  retireNewestWorker() {
+    const workers = this.activeWorkers
+    if (workers.length <= 1) return false
+    this.retiring.add(workers[workers.length - 1])
+    this.maxWorkers = workers.length - 1
+    this.newSpeedWindow()
+    return true
   }
 
   /** @returns {Promise<Object>} v1 transcript */
@@ -337,10 +416,12 @@ export class BrowserTranscription {
     let doneSec = 0
     let startedAt = performance.now()
     let gpuSec = 0 // audio transcribed on the GPU in this session (for the time estimate)
-    const report = (fileIndex) => {
+    let fileIndex = 0
+    const report = (index = fileIndex) => {
+      fileIndex = index
       const elapsed = (performance.now() - startedAt) / 1000
-      const rate = gpuSec > 0 && elapsed > 5 ? gpuSec / elapsed : 0
-      this.update({ status: 'transcribing', progress: totalSec ? doneSec / totalSec : 0, currentFileIndex: fileIndex, numFiles: files.length, etaSec: rate ? Math.round((totalSec - doneSec) / rate) : null, workers: this.workers.size })
+      const rate = this.speed || (gpuSec > 0 && elapsed > 5 ? gpuSec / elapsed : 0)
+      this.update({ status: 'transcribing', progress: totalSec ? doneSec / totalSec : 0, currentFileIndex: fileIndex, numFiles: files.length, etaSec: rate ? Math.round((totalSec - doneSec) / rate) : null, workers: this.activeWorkers.length, speed: this.speed })
     }
 
     this.update({ status: 'loading', numFiles: files.length, modelProgress: 0 })
@@ -348,20 +429,21 @@ export class BrowserTranscription {
       if (progress.status === 'progress_total' && progress.total) this.update({ status: 'loading', modelProgress: progress.loaded / progress.total })
     })
     this.checkCancelled()
-    this.workers.add(first)
     this.queue = new PartQueue(this.maxWorkers * QUEUE_PER_WORKER)
     startedAt = performance.now()
-    report(0)
 
     let fatal = null
     const runners = []
     const runWorker = async (worker) => {
       let failures = 0
-      while (!this.cancelled) {
+      while (!this.cancelled && !this.retiring.has(worker)) {
         const part = await this.queue.take()
         if (!part) return
+        const window = this.speedWindow
+        const partStartedAt = performance.now()
         try {
           const words = await this.transcribePart(worker, part)
+          this.recordSpeed(worker, window, part.duration, (performance.now() - partStartedAt) / 1000)
           await partCache.set(part.key, words)
           results[part.fileIndex].push({ start: part.start, words })
           doneSec += part.duration
@@ -375,38 +457,62 @@ export class BrowserTranscription {
             // Out of GPU memory or a broken device: this worker stops, the others continue
             console.warn('[browserTranscriber] Worker stopped:', error.message)
             this.maxWorkers = Math.max(1, this.workers.size - 1)
-            worker.terminate()
-            this.workers.delete(worker)
+            this.removeWorker(worker)
             if (!this.workers.size) {
               fatal = new TranscriberError(error.message, 'transcription_failed')
-              this.queue.close()
+              this.closeQueue()
             }
+            report()
             return
           }
         }
       }
+      if (this.retiring.has(worker)) {
+        this.removeWorker(worker)
+        report()
+      }
     }
-    runners.push(runWorker(first))
+    this.addWorker(first, runners, runWorker)
+    report(0)
 
-    // More workers while the first one is busy, until the GPU memory runs out or MAX_WORKERS
-    const addWorkers = async () => {
-      while (!this.cancelled && !this.queue.closed && this.workers.size < this.maxWorkers) {
+    // More workers while each one makes transcription faster, fewer when it gets much slower
+    const scaleWorkers = async () => {
+      let best = await this.measureSpeed()
+      console.info(`[browserTranscriber] 1 worker: ${best?.toFixed(1)}x real time`)
+      while (best && this.workers.size < this.maxWorkers) {
         let worker
         try {
           worker = await loadWorker(this.workerUrl, this.precision)
         } catch (error) {
           console.warn('[browserTranscriber] No more workers:', error.message)
-          return
+          break
         }
         if (this.cancelled || this.queue.closed) {
           worker.terminate()
           return
         }
-        this.workers.add(worker)
-        runners.push(runWorker(worker))
+        this.addWorker(worker, runners, runWorker)
+        report()
+        const speed = await this.measureSpeed()
+        if (speed === null) return
+        console.info(`[browserTranscriber] ${this.workers.size} workers: ${speed.toFixed(1)}x real time`)
+        if (speed < best * (1 + MIN_WORKER_GAIN)) {
+          this.retireNewestWorker()
+          report()
+          break
+        }
+        best = speed
+      }
+      while (best) {
+        const speed = await this.measureSpeed()
+        if (speed === null) return
+        if (speed < best * SLOWDOWN && this.retireNewestWorker()) {
+          console.info(`[browserTranscriber] ${speed.toFixed(1)}x real time (was ${best.toFixed(1)}x): one worker less`)
+          report()
+        }
       }
     }
-    const adding = addWorkers()
+    const scaling = scaleWorkers()
 
     try {
       await this.feed(files, results, (seconds, fileIndex) => {
@@ -414,9 +520,9 @@ export class BrowserTranscription {
         report(fileIndex)
       })
     } finally {
-      this.queue.close()
+      this.closeQueue()
     }
-    await adding
+    await scaling
     // Runners added while waiting are in the array too
     for (let i = 0; i < runners.length; i++) await runners[i]
     this.checkCancelled()
