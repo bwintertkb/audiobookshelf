@@ -29,6 +29,7 @@
 import ePub from 'epubjs'
 import ReadAlong from '@/players/ReadAlong'
 import { readAlongWordCount } from '@/players/transcriptUtils'
+import { narrationColors, readingTheme } from '@/players/readingThemes'
 import { createAnnotation, highlighterColor, wordsText } from '@/players/annotations'
 import { getAnnotationStore } from '@/players/annotationStore'
 import { loadTranscript as fetchTranscript } from '@/players/transcriptCache'
@@ -161,21 +162,10 @@ export default {
       return `/api/items/${this.libraryItemId}/ebook`
     },
     themeRules() {
-      const theme = this.ereaderSettings.theme
-      const isDark = theme === 'dark'
-      const isSepia = theme === 'sepia'
-
-      const fontColor = isDark
-        ? '#fff'
-        : isSepia
-        ? '#5b4636'
-        : '#000'
-
-      const backgroundColor = isDark
-        ? 'rgb(35 35 35)'
-        : isSepia
-        ? 'rgb(244, 236, 216)'
-        : 'rgb(255, 255, 255)'
+      // Reading themes (players/readingThemes.js), shared with the transcript panel
+      const theme = readingTheme(this.ereaderSettings.theme)
+      const fontColor = theme.text
+      const backgroundColor = theme.bg
 
       const lineSpacing = this.ereaderSettings.lineSpacing / 100
       const fontScale   = this.ereaderSettings.fontScale   / 100
@@ -201,6 +191,7 @@ export default {
       if (!this.rendition) return
 
       this.applyTheme()
+      this.readAlong?.setColors(narrationColors(settings.theme))
 
       const fontScale = settings.fontScale || 100
       this.rendition.themes.fontSize(`${fontScale}%`)
@@ -237,6 +228,7 @@ export default {
         rendition: this.rendition,
         transcript,
         highlightWords: this.readAlongWords,
+        colors: narrationColors(this.ereaderSettings.theme),
         onSeek: (time) => this.$eventBus.$emit('playback-seek', time),
         onFollowChanged: (following) => {
           this.readAlongFollowing = following

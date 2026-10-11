@@ -38,7 +38,9 @@ export const state = () => ({
     readAlongMediaSession: true,
     // Highlighter pen: selected words are highlighted right away (no menu), in the colour last picked
     highlighterMode: false,
-    highlighterColor: 'yellow'
+    highlighterColor: 'yellow',
+    // Colour scheme of the transcript and the ebook reader (players/readingThemes.js; '' until chosen: the reader's old theme)
+    readingTheme: ''
   }
 })
 

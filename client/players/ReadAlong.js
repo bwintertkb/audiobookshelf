@@ -38,8 +38,10 @@ export const WORD_HIGHLIGHT = 'abs-readalong-word'
 export const SENTENCE_HIGHLIGHT = 'abs-readalong-sentence'
 /** The user's highlights, one CSS Custom Highlight per colour */
 export const ANNOTATION_HIGHLIGHT_PREFIX = 'abs-readalong-annotation-'
-const HIGHLIGHT_CSS = `::highlight(${WORD_HIGHLIGHT}) { background-color: rgba(250, 204, 21, 0.55); }
-::highlight(${SENTENCE_HIGHLIGHT}) { background-color: rgba(250, 204, 21, 0.16); }
+/** Colours of the narrated words and sentence (readingThemes.js NARRATION_COLORS suit each reading theme) */
+const DEFAULT_COLORS = { words: 'rgba(250, 204, 21, 0.55)', sentence: 'rgba(250, 204, 21, 0.16)' }
+const highlightCss = (colors) => `::highlight(${WORD_HIGHLIGHT}) { background-color: ${colors.words}; }
+::highlight(${SENTENCE_HIGHLIGHT}) { background-color: ${colors.sentence}; }
 ${ANNOTATION_COLORS.map((color) => `::highlight(${ANNOTATION_HIGHLIGHT_PREFIX}${color}) { background-color: ${ANNOTATION_COLOR_VALUES[color]}; }`).join('\n')}`
 
 function isSkipped(element) {
@@ -102,16 +104,18 @@ export default class ReadAlong {
    * @param {import('epubjs').Rendition} options.rendition
    * @param {Object} options.transcript - v1 transcript with source "ebook"
    * @param {number} [options.highlightWords] - words highlighted around the narrated one (1, 3 or 5)
+   * @param {{words: string, sentence: string}} [options.colors] - colours of the narrated words and sentence
    * @param {(time: number) => void} [options.onSeek] - a word was clicked
    * @param {() => void} [options.onFollowChanged] - following was paused or resumed
    * @param {(selection: {first: number, last: number, rect: Object, annotation: Object|null}) => void} [options.onSelect] - words were
    *   selected, right-clicked or long-pressed (rect: where they are in the reader's window; selected: chosen by selecting text
    *   or long-press and drag, not by asking for the menu with a right-click)
    */
-  constructor({ rendition, transcript, highlightWords = DEFAULT_READ_ALONG_WORDS, onSeek, onFollowChanged, onSelect }) {
+  constructor({ rendition, transcript, highlightWords = DEFAULT_READ_ALONG_WORDS, colors = DEFAULT_COLORS, onSeek, onFollowChanged, onSelect }) {
     this.rendition = rendition
     this.transcript = transcript
     this.highlightWords = highlightWords
+    this.colors = colors
     this.onSeek = onSeek
     this.onFollowChanged = onFollowChanged
     this.onSelect = onSelect
@@ -162,7 +166,7 @@ export default class ReadAlong {
   onRendered(section, view) {
     const contents = view?.contents
     if (!contents?.document || !this.spineWords.has(section.index)) return
-    contents.addStylesheetCss(HIGHLIGHT_CSS, 'abs-readalong')
+    contents.addStylesheetCss(highlightCss(this.colors), 'abs-readalong')
     const entry = this.mapSection(section.index, contents.document)
     entry.view = view
     entry.contents = contents
@@ -283,6 +287,19 @@ export default class ReadAlong {
     // Retried on every tick until the word is on screen (a navigation may still be running)
     if (this.following && this.followPending) this.follow()
     this.pump()
+  }
+
+  /** Colours of the narrated words and sentence (the reading theme changed) */
+  setColors(colors) {
+    if (!colors || (colors.words === this.colors.words && colors.sentence === this.colors.sentence)) return
+    this.colors = colors
+    for (const entry of this.sections.values()) {
+      try {
+        entry.contents?.addStylesheetCss(highlightCss(colors), 'abs-readalong')
+      } catch (error) {
+        // document of a removed section
+      }
+    }
   }
 
   /** Number of words highlighted around the narrated word */

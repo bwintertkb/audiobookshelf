@@ -419,6 +419,19 @@ describe('<EpubReader /> read along', () => {
     })
   })
 
+  it('shows the book and the read-along in the reading theme', () => {
+    mount().then(({ vm }) => {
+      cy.wrap(null, { timeout: 10000 }).should(() => expect(highlighted(WORD_HIGHLIGHT)).to.equal(group(0)))
+      cy.then(() => vm.updateSettings({ ...vm.ereaderSettings, theme: 'sage' }))
+      cy.wrap(null).should(() => {
+        const iframe = document.querySelector('#viewer iframe')
+        expect(getComputedStyle(iframe.contentDocument.body).backgroundColor).to.equal('rgb(216, 232, 212)')
+        expect(vm.readAlong.colors.words).to.equal('rgba(255, 193, 7, 0.5)')
+        expect(iframe.contentDocument.getElementById('epubjs-inserted-css-abs-readalong').textContent).to.contain('rgba(255, 193, 7, 0.5)')
+      })
+    })
+  })
+
   it('moves the listening position along when reading on with the audio paused', () => {
     mount({ playing: false, keepProgress: true }).then(({ vm, events, patches }) => {
       cy.wrap(null, { timeout: 10000 }).should(() => expect(highlighted(WORD_HIGHLIGHT)).to.equal(group(0)))

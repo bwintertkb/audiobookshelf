@@ -519,6 +519,28 @@ describe('<TranscriptPanel />', () => {
       })
     })
 
+    it('changes the colour scheme, shared with the ebook reader', () => {
+      mountEbookPanel({ settings: { readingTheme: '' } }).then(({ settings }) => {
+        // Before one is chosen: Night
+        cy.get('#transcript-panel')
+          .should('have.class', 'rt-dark')
+          .and(($el) => expect(getComputedStyle($el[0]).backgroundColor).to.equal('rgb(35, 35, 35)'))
+        cy.get(`button[aria-label="${Strings.LabelTranscriptDisplay}"]`).click()
+        cy.get(`.transcript-theme-swatch[aria-label="${Strings.LabelReadingThemeSepia}"]`).click()
+        cy.then(() => expect(settings.readingTheme).to.equal('sepia'))
+        cy.get('#transcript-panel')
+          .should('have.class', 'rt-light')
+          .and(($el) => expect(getComputedStyle($el[0]).backgroundColor).to.equal('rgb(244, 236, 216)'))
+        cy.get('#transcript-panel .transcript-paragraph')
+          .eq(1)
+          .should(($el) => expect(getComputedStyle($el[0]).color).to.equal('rgb(91, 70, 54)'))
+        cy.get(`.transcript-theme-swatch[aria-label="${Strings.LabelReadingThemeSepia}"]`).should('have.attr', 'aria-checked', 'true')
+        // The reader's old theme names still work
+        cy.then(() => (settings.readingTheme = 'light'))
+        cy.get('#transcript-panel').should(($el) => expect(getComputedStyle($el[0]).backgroundColor).to.equal('rgb(255, 255, 255)'))
+      })
+    })
+
     it('shows highlights saved before, from the server', () => {
       const saved = [{ id: 'annotation-1', start: 30, end: 31.2, text: '“How happy we are', color: 'orange', note: 'Joy', createdAt: 1, updatedAt: 1 }]
       mountEbookPanel({ request: annotationRequest(saved) }).then(() => {

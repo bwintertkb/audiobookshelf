@@ -1,12 +1,12 @@
 <template>
   <!-- Rendered as the first child of the player container without z-index, so the player controls always stay on top -->
-  <div id="transcript-panel" class="fixed left-0 right-0 lg:left-auto top-16 bottom-48 lg:bottom-40 w-full lg:w-[30rem] bg-bg border-l border-t border-black-200 shadow-xl flex flex-col text-gray-200">
-    <div class="flex items-center pl-3 pr-1 py-1 border-b border-black-200 shrink-0">
-      <span class="material-symbols text-xl text-gray-300">subtitles</span>
+  <div id="transcript-panel" class="fixed left-0 right-0 lg:left-auto top-16 bottom-48 lg:bottom-40 w-full lg:w-[30rem] border-l border-t transcript-line shadow-xl flex flex-col" :class="themeClass" :style="themeStyle">
+    <div class="flex items-center pl-3 pr-1 py-1 border-b transcript-line shrink-0">
+      <span class="material-symbols text-xl transcript-muted">subtitles</span>
       <p class="pl-2 font-semibold truncate">{{ $strings.HeaderTranscript }}</p>
       <div class="grow" />
       <ui-tooltip :text="$strings.ButtonSearch" direction="bottom">
-        <button class="transcript-icon-btn" :class="showSearch ? 'text-white' : ''" :aria-label="$strings.ButtonSearch" @click="toggleSearch"><span class="material-symbols text-xl">search</span></button>
+        <button class="transcript-icon-btn" :class="{ 'transcript-icon-on': showSearch }" :aria-label="$strings.ButtonSearch" @click="toggleSearch"><span class="material-symbols text-xl">search</span></button>
       </ui-tooltip>
       <ui-tooltip :text="highlighterMode ? $strings.LabelHighlighterOn : $strings.LabelHighlighterOff" direction="bottom">
         <button class="transcript-icon-btn" :aria-label="$strings.ButtonHighlighter" :aria-pressed="highlighterMode ? 'true' : 'false'" @click="toggleHighlighter">
@@ -14,7 +14,7 @@
         </button>
       </ui-tooltip>
       <ui-tooltip :text="$strings.LabelTranscriptDisplay" direction="bottom">
-        <button class="transcript-icon-btn" :class="showDisplayMenu ? 'text-white' : ''" :aria-label="$strings.LabelTranscriptDisplay" :aria-expanded="showDisplayMenu ? 'true' : 'false'" @click="showDisplayMenu = !showDisplayMenu"><span class="material-symbols text-xl">match_case</span></button>
+        <button class="transcript-icon-btn" :class="{ 'transcript-icon-on': showDisplayMenu }" :aria-label="$strings.LabelTranscriptDisplay" :aria-expanded="showDisplayMenu ? 'true' : 'false'" @click="showDisplayMenu = !showDisplayMenu"><span class="material-symbols text-xl">match_case</span></button>
       </ui-tooltip>
       <ui-tooltip :text="$strings.HeaderNotesAndHighlights" direction="bottom">
         <button class="transcript-icon-btn" :aria-label="$strings.HeaderNotesAndHighlights" @click="showAnnotations = true"><span class="material-symbols text-xl">sticky_note_2</span></button>
@@ -27,51 +27,50 @@
       </ui-tooltip>
     </div>
 
-    <!-- Display: text size, font, layout (ebook transcripts), highlighted words -->
-    <div v-if="showDisplayMenu" class="transcript-display-menu px-3 py-2 border-b border-black-200 shrink-0 text-sm space-y-2">
+    <!-- Display: colour scheme, text size, font, layout (ebook transcripts), highlighted words -->
+    <div v-if="showDisplayMenu" class="transcript-display-menu px-3 py-2 border-b transcript-line shrink-0 text-sm space-y-2">
       <div class="flex items-center">
-        <p class="w-28 shrink-0 text-gray-300">{{ $strings.LabelFontScale }}</p>
+        <p class="w-28 shrink-0 transcript-muted">{{ $strings.LabelTheme }}</p>
+        <div class="flex items-center gap-1.5" role="radiogroup" :aria-label="$strings.LabelTheme">
+          <button v-for="theme in themeItems" :key="theme.value" class="transcript-theme-swatch" :class="{ 'transcript-theme-selected': theme.value === readingThemeValue }" :style="{ backgroundColor: theme.bg, color: theme.text }" role="radio" :aria-checked="theme.value === readingThemeValue ? 'true' : 'false'" :aria-label="theme.label" :title="theme.label" @click="readingThemeValue = theme.value">
+            Aa
+          </button>
+        </div>
+      </div>
+      <div class="flex items-center">
+        <p class="w-28 shrink-0 transcript-muted">{{ $strings.LabelFontScale }}</p>
         <button class="transcript-icon-btn" :disabled="fontScale <= minFontScale" :aria-label="$strings.LabelFontScale + ' -'" @click="changeFontScale(-0.125)"><span class="material-symbols text-xl">text_decrease</span></button>
         <p class="w-12 text-center">{{ Math.round(fontScale * 100) }}%</p>
         <button class="transcript-icon-btn" :disabled="fontScale >= maxFontScale" :aria-label="$strings.LabelFontScale + ' +'" @click="changeFontScale(0.125)"><span class="material-symbols text-xl">text_increase</span></button>
       </div>
       <div class="flex items-center">
-        <p class="w-28 shrink-0 text-gray-300">{{ $strings.LabelFontFamily }}</p>
+        <p class="w-28 shrink-0 transcript-muted">{{ $strings.LabelFontFamily }}</p>
         <ui-toggle-btns v-model="fontValue" :items="fontItems" class="transcript-toggle" />
       </div>
       <div v-if="transcriptSource === 'ebook'" class="flex items-center">
-        <p class="w-28 shrink-0 text-gray-300">{{ $strings.LabelTranscriptLayout }}</p>
+        <p class="w-28 shrink-0 transcript-muted">{{ $strings.LabelTranscriptLayout }}</p>
         <ui-toggle-btns v-model="layoutValue" :items="layoutItems" class="transcript-toggle" />
       </div>
       <div class="flex items-center">
-        <p class="w-28 shrink-0 text-gray-300">{{ $strings.LabelReadAlongHighlight }}</p>
+        <p class="w-28 shrink-0 transcript-muted">{{ $strings.LabelReadAlongHighlight }}</p>
         <ui-toggle-btns v-model="readAlongWordsValue" :items="readAlongWordsItems" class="transcript-toggle" />
       </div>
     </div>
 
-    <div v-if="showSearch" class="flex items-center px-3 py-1.5 border-b border-black-200 shrink-0">
-      <input
-        ref="searchInput"
-        v-model="searchQuery"
-        type="search"
-        class="grow min-w-0 bg-primary border border-gray-600 rounded-sm px-2 py-1 text-sm text-gray-100 outline-hidden focus:border-gray-400"
-        :placeholder="$strings.LabelTranscriptSearch"
-        :aria-label="$strings.LabelTranscriptSearch"
-        @keydown.enter.prevent="goToSearchResult($event.shiftKey ? -1 : 1)"
-        @keydown.esc.stop.prevent="toggleSearch"
-      />
-      <p class="text-xs text-gray-300 px-2 whitespace-nowrap">{{ searchStatusText }}</p>
+    <div v-if="showSearch" class="flex items-center px-3 py-1.5 border-b transcript-line shrink-0">
+      <input ref="searchInput" v-model="searchQuery" type="search" class="grow min-w-0 transcript-input border rounded-sm px-2 py-1 text-sm outline-hidden" :placeholder="$strings.LabelTranscriptSearch" :aria-label="$strings.LabelTranscriptSearch" @keydown.enter.prevent="goToSearchResult($event.shiftKey ? -1 : 1)" @keydown.esc.stop.prevent="toggleSearch" />
+      <p class="text-xs transcript-muted px-2 whitespace-nowrap">{{ searchStatusText }}</p>
       <button class="transcript-icon-btn" :disabled="!searchResults.length" :aria-label="$strings.ButtonPrevious" @click="goToSearchResult(-1)"><span class="material-symbols text-xl">keyboard_arrow_up</span></button>
       <button class="transcript-icon-btn" :disabled="!searchResults.length" :aria-label="$strings.ButtonNext" @click="goToSearchResult(1)"><span class="material-symbols text-xl">keyboard_arrow_down</span></button>
     </div>
 
-    <p v-if="audioMismatch" class="px-3 py-2 text-xs bg-warning/20 text-gray-100 shrink-0">{{ $strings.MessageTranscriptAudioMismatch }}</p>
+    <p v-if="audioMismatch" class="px-3 py-2 text-xs bg-warning/20 shrink-0">{{ $strings.MessageTranscriptAudioMismatch }}</p>
 
     <div class="relative grow min-h-0">
       <div v-if="loading" class="absolute inset-0 flex items-center justify-center">
         <widgets-loading-spinner />
       </div>
-      <p v-else-if="error" class="p-4 text-sm text-gray-300">{{ error }}</p>
+      <p v-else-if="error" class="p-4 text-sm transcript-muted">{{ error }}</p>
 
       <div v-show="!loading && !error" ref="scroller" class="transcript-scroller absolute inset-0 overflow-y-auto overflow-x-hidden outline-hidden" tabindex="0" @scroll.passive="onScroll" @wheel.passive="stopAutoScroll" @touchstart.passive="stopAutoScroll" @mousedown="onScrollerMousedown" @mouseup="onMouseUp" @keydown="onScrollerKeydown" @click="onClick" @contextmenu="onContextMenu">
         <div class="relative" :style="{ height: totalHeight + 'px' }">
@@ -97,7 +96,7 @@
         </div>
       </div>
 
-      <button v-if="!autoScroll && !loading && !error" class="absolute bottom-3 left-1/2 -translate-x-1/2 bg-primary border border-gray-600 hover:border-gray-400 shadow-lg rounded-full px-3 py-1 text-sm flex items-center whitespace-nowrap" @click="returnToCurrentPosition"><span class="material-symbols text-lg pr-1">my_location</span>{{ $strings.ButtonReturnToCurrentPosition }}</button>
+      <button v-if="!autoScroll && !loading && !error" class="absolute bottom-3 left-1/2 -translate-x-1/2 transcript-floating-btn border shadow-lg rounded-full px-3 py-1 text-sm flex items-center whitespace-nowrap" @click="returnToCurrentPosition"><span class="material-symbols text-lg pr-1">my_location</span>{{ $strings.ButtonReturnToCurrentPosition }}</button>
     </div>
 
     <player-read-along-popup v-if="popup" :library-item-id="libraryItem.id" :selection="popup.selection" :annotation="popup.annotation" :anchor="popup.anchor" :play-time="popup.playTime" @play="playFrom" @close="closePopup" />
@@ -109,6 +108,7 @@
 import { READ_ALONG_WORD_COUNTS, buildTranscriptIndex, findLastLessOrEqual, findPosition, getTranscriptAudioMismatch, highlightedWords, readAlongWordCount, searchTranscript } from '@/players/transcriptUtils'
 import { ANNOTATION_COLORS, ANNOTATION_SWATCHES, annotationWordRanges, annotationsAtWord, createAnnotation, highlighterColor, wordsText } from '@/players/annotations'
 import { getAnnotationStore } from '@/players/annotationStore'
+import { READING_THEMES, READING_THEME_NAMES, readingTheme, readingThemeName, readingThemeStyle } from '@/players/readingThemes'
 import { loadTranscript as fetchTranscript } from '@/players/transcriptCache'
 
 const OVERSCAN_PX = 600
@@ -214,6 +214,24 @@ export default {
     },
     userSetting() {
       return this.$store.getters['user/getUserSetting'] || (() => null)
+    },
+    /** Colour scheme of the text (user setting, shared with the ebook reader) */
+    readingThemeValue: {
+      get() {
+        return readingThemeName(this.userSetting('readingTheme'))
+      },
+      set(value) {
+        this.$store.dispatch('user/updateUserSettings', { readingTheme: value })
+      }
+    },
+    themeStyle() {
+      return readingThemeStyle(this.readingThemeValue)
+    },
+    themeClass() {
+      return readingTheme(this.readingThemeValue).dark ? 'rt-dark' : 'rt-light'
+    },
+    themeItems() {
+      return READING_THEME_NAMES.map((name) => ({ value: name, bg: READING_THEMES[name].bg, text: READING_THEMES[name].text, label: this.$strings[`LabelReadingTheme${name[0].toUpperCase()}${name.slice(1)}`] }))
     },
     /** Ebook transcripts are laid out like the book (paragraphs, headings) unless set to a sentence per line */
     bookLayout() {
@@ -924,15 +942,47 @@ export default {
 </script>
 
 <style scoped>
+#transcript-panel {
+  background-color: var(--rt-bg);
+  color: var(--rt-text);
+}
+.transcript-line {
+  border-color: var(--rt-border);
+}
+.transcript-muted {
+  color: var(--rt-muted);
+}
+.transcript-input {
+  background-color: var(--rt-surface);
+  border-color: var(--rt-border);
+  color: var(--rt-text);
+}
+.transcript-floating-btn {
+  background-color: var(--rt-surface);
+  border-color: var(--rt-border);
+  color: var(--rt-text);
+}
+.transcript-theme-swatch {
+  width: 1.9rem;
+  height: 1.9rem;
+  border-radius: 9999px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  box-shadow: inset 0 0 0 1px rgb(128 128 128 / 0.5);
+}
+.transcript-theme-selected {
+  box-shadow: 0 0 0 2px var(--rt-accent);
+}
 .transcript-icon-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   padding: 0.25rem;
-  color: rgb(209 213 219);
+  color: var(--rt-muted);
 }
-.transcript-icon-btn:hover:not(:disabled) {
-  color: white;
+.transcript-icon-btn:hover:not(:disabled),
+.transcript-icon-on {
+  color: var(--rt-text);
 }
 .transcript-icon-btn:disabled {
   opacity: 0.4;
@@ -940,6 +990,15 @@ export default {
 .transcript-toggle ::v-deep .toggle-btn {
   padding: 0.15rem 0.7rem;
   font-size: 0.8rem;
+  color: var(--rt-muted);
+  border-color: var(--rt-border);
+}
+.transcript-toggle ::v-deep .toggle-btn.selected {
+  color: var(--rt-heading);
+  background-color: var(--rt-surface);
+}
+.transcript-toggle ::v-deep .toggle-btn:hover:not(:disabled) {
+  color: var(--rt-text);
 }
 .transcript-scroller {
   overflow-anchor: none;
@@ -954,7 +1013,7 @@ export default {
 .transcript-chapter {
   font-size: 1.15em;
   font-weight: 600;
-  color: white;
+  color: var(--rt-heading);
   padding-top: 14px;
   line-height: 1.6;
   cursor: pointer;
@@ -964,20 +1023,20 @@ export default {
 }
 .transcript-segment {
   line-height: 1.6;
-  color: rgb(156 163 175);
+  color: var(--rt-muted);
   border-left: 3px solid transparent;
   padding-left: 8px;
   margin-left: -11px;
   overflow-wrap: anywhere;
 }
 .transcript-segment-active {
-  color: rgb(243 244 246);
-  border-left-color: var(--color-accent);
+  color: var(--rt-text);
+  border-left-color: var(--rt-accent);
 }
 .transcript-segment-heading {
   font-size: 1.15em;
   font-weight: 600;
-  color: rgb(229 231 235);
+  color: var(--rt-heading);
 }
 /* Book layout: the book's paragraphs, indented and justified like a printed page */
 .transcript-book .transcript-row {
@@ -991,7 +1050,7 @@ export default {
   text-align: justify;
   hyphens: auto;
   overflow-wrap: anywhere;
-  color: rgb(209 213 219);
+  color: var(--rt-text);
 }
 .transcript-paragraph.transcript-no-indent {
   text-indent: 0;
@@ -1002,11 +1061,11 @@ export default {
   line-height: 1.4;
   text-indent: 0;
   text-align: center;
-  color: white;
+  color: var(--rt-heading);
   padding: 1.2em 0 0.55em;
 }
 .transcript-sentence.transcript-segment-active {
-  color: white;
+  color: var(--rt-heading);
 }
 .transcript-word {
   cursor: pointer;
@@ -1017,9 +1076,8 @@ export default {
 }
 .transcript-word-active,
 .transcript-word-group {
-  background-color: rgb(250 204 21 / 0.3);
-  color: white;
-  box-shadow: 0 0 0 2px rgb(250 204 21 / 0.3);
+  background-color: var(--rt-words);
+  box-shadow: 0 0 0 2px var(--rt-words);
 }
 /* The narrated word is part of the highlighted words (::highlight below) */
 .transcript-highlight-api .transcript-word-active {
@@ -1041,7 +1099,7 @@ export default {
 .transcript-note-marker {
   font-size: 0.85em;
   vertical-align: super;
-  color: rgb(250 204 21);
+  color: var(--rt-note);
   cursor: pointer;
   text-indent: 0;
   padding-left: 1px;
@@ -1050,14 +1108,17 @@ export default {
   background-color: rgb(33 150 243 / 0.35);
 }
 .transcript-search-current {
-  background-color: rgb(255 255 255 / 0.05);
+  background-color: var(--rt-hover);
 }
 </style>
 
 <style>
-::highlight(abs-transcript-words) {
-  background-color: rgb(250 204 21 / 0.3);
-  color: white;
+/* Narrated words: stronger on light pages (readingThemes.js NARRATION_COLORS) */
+.rt-dark ::highlight(abs-transcript-words) {
+  background-color: rgba(250, 204, 21, 0.45);
+}
+.rt-light ::highlight(abs-transcript-words) {
+  background-color: rgba(255, 193, 7, 0.5);
 }
 ::highlight(abs-transcript-annotation-yellow) {
   background-color: rgb(250 204 21 / 0.38);

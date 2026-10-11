@@ -1,5 +1,5 @@
 <template>
-  <div v-if="show" id="reader" :data-theme="ereaderTheme" class="group absolute top-0 left-0 w-full z-60 data-[theme=dark]:bg-primary data-[theme=dark]:text-white data-[theme=light]:bg-white data-[theme=light]:text-black data-[theme=sepia]:bg-[rgb(244,236,216)] data-[theme=sepia]:text-[#5b4636]" :class="{ 'reader-player-open': !!streamLibraryItem }">
+  <div v-if="show" id="reader" :data-theme="ereaderTheme" class="group absolute top-0 left-0 w-full z-60" :class="{ 'reader-player-open': !!streamLibraryItem }" :style="themeStyle">
     <div class="absolute top-4 left-4 z-20 flex items-center">
       <button v-if="isEpub" @click="toggleToC" type="button" aria-label="Table of contents menu" class="inline-flex opacity-80 hover:opacity-100">
         <span class="material-symbols text-2xl">menu</span>
@@ -40,7 +40,8 @@
     <div v-if="tocOpen" class="w-full h-full overflow-y-scroll absolute inset-0 bg-black/20 z-20" @click.stop.prevent="toggleToC"></div>
     <div
       v-if="isEpub"
-      class="w-96 h-full max-h-full absolute top-0 left-0 shadow-xl transition-transform z-30 group-data-[theme=dark]:bg-primary group-data-[theme=dark]:text-white group-data-[theme=light]:bg-white group-data-[theme=light]:text-black group-data-[theme=sepia]:bg-[rgb(244,236,216)] group-data-[theme=sepia]:text-[#5b4636]"
+      class="w-96 h-full max-h-full absolute top-0 left-0 shadow-xl transition-transform z-30"
+      :style="themeStyle"
       :class="tocOpen ? 'translate-x-0' : '-translate-x-96'"
       @click.stop.prevent
     >
@@ -94,7 +95,7 @@
           <div class="w-40">
             <p class="text-lg">{{ $strings.LabelTheme }}:</p>
           </div>
-          <ui-toggle-btns v-model="ereaderSettings.theme" :items="themeItems.theme" @input="settingsUpdated" />
+          <ui-toggle-btns v-model="readingThemeValue" :items="readingThemeItems" />
         </div>
         <div class="flex items-center mb-4">
           <div class="w-40">
@@ -144,6 +145,7 @@
 <script>
 import { READ_ALONG_WORD_COUNTS, readAlongWordCount } from '@/players/transcriptUtils'
 import { ANNOTATION_SWATCHES, highlighterColor } from '@/players/annotations'
+import { READING_THEME_NAMES, readingTheme, readingThemeName } from '@/players/readingThemes'
 
 export default {
   data() {
@@ -174,6 +176,11 @@ export default {
     }
   },
   watch: {
+    readingThemeValue(value) {
+      if (this.ereaderSettings.theme === value) return
+      this.ereaderSettings.theme = value
+      this.settingsUpdated()
+    },
     show(newVal) {
       if (newVal) {
         this.init()
@@ -190,8 +197,24 @@ export default {
       }
     },
     ereaderTheme() {
-      if (this.isEpub) return this.ereaderSettings.theme
-      return 'dark'
+      if (this.isEpub) return this.readingThemeValue
+      return 'night'
+    },
+    /** Colour scheme of the book (user setting, shared with the transcript panel) */
+    readingThemeValue: {
+      get() {
+        return readingThemeName(this.$store.getters['user/getUserSetting']('readingTheme') || this.ereaderSettings.theme)
+      },
+      set(value) {
+        this.$store.dispatch('user/updateUserSettings', { readingTheme: value })
+      }
+    },
+    readingThemeItems() {
+      return READING_THEME_NAMES.map((name) => ({ text: this.$strings[`LabelReadingTheme${name[0].toUpperCase()}${name.slice(1)}`], value: name }))
+    },
+    themeStyle() {
+      const theme = readingTheme(this.ereaderTheme)
+      return { backgroundColor: theme.bg, color: theme.text }
     },
     /** Words highlighted around the narrated word when reading along (user setting, shared with the transcript panel) */
     readAlongWords: {
@@ -340,7 +363,7 @@ export default {
       return this.$store.state.ereaderFileId
     },
     isDarkTheme() {
-      return this.ereaderSettings.theme === 'dark'
+      return readingTheme(this.ereaderTheme).dark
     }
   },
   methods: {
@@ -465,6 +488,9 @@ export default {
               this.ereaderSettings[key] = _ereaderSettings[key]
             }
           }
+          // The reader's theme became the reading theme shared with the transcript: keep the one chosen before
+          if (!this.$store.getters['user/getUserSetting']('readingTheme')) this.readingThemeValue = readingThemeName(this.ereaderSettings.theme)
+          this.ereaderSettings.theme = this.readingThemeValue
           this.settingsUpdated()
         }
       } catch (error) {
