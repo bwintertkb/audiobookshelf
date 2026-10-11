@@ -8,6 +8,7 @@ const { toNumber, isNullOrNaN, isUUID } = require('../utils/index')
 const userStats = require('../utils/queries/userStats')
 const parseUserAgent = require('../utils/parsers/parseUserAgent')
 const AnnotationManager = require('../managers/AnnotationManager')
+const { validateReadingSettings, savedReadingSettings } = require('../utils/readingSettings')
 
 /**
  * @typedef RequestUserObject
@@ -685,6 +686,35 @@ class MeController {
   async getAnnotations(req, res) {
     if (!(await this.getAccessibleLibraryItem(req, res))) return
     res.json({ annotations: await AnnotationManager.getAnnotations(req.params.id, req.user.id) })
+  }
+
+  /**
+   * GET: /api/me/reading-settings
+   * Reading settings saved on the account: theme, font, text size, ... of books and transcripts (utils/readingSettings.js)
+   *
+   * @param {RequestWithUser} req
+   * @param {Response} res
+   */
+  getReadingSettings(req, res) {
+    res.json({ settings: savedReadingSettings(req.user.extraData?.readingSettings) })
+  }
+
+  /**
+   * PATCH: /api/me/reading-settings
+   * Change some reading settings; the user's other devices get them (socket reading_settings_updated)
+   *
+   * @param {RequestWithUser} req
+   * @param {Response} res
+   */
+  async updateReadingSettings(req, res) {
+    const { settings, error } = validateReadingSettings(req.body)
+    if (error) return res.status(400).send(error)
+    const readingSettings = { ...savedReadingSettings(req.user.extraData?.readingSettings), ...settings }
+    req.user.extraData = { ...(req.user.extraData || {}), readingSettings }
+    req.user.changed('extraData', true)
+    await req.user.save()
+    SocketAuthority.clientEmitter(req.user.id, 'reading_settings_updated', { settings: readingSettings })
+    res.json({ settings: readingSettings })
   }
 
   /**

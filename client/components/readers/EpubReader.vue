@@ -168,8 +168,8 @@ export default {
       const backgroundColor = theme.bg
 
       const lineSpacing = this.ereaderSettings.lineSpacing / 100
-      const fontScale   = this.ereaderSettings.fontScale   / 100
-      const textStroke  = this.ereaderSettings.textStroke  / 100
+      const fontScale = this.ereaderSettings.fontScale / 100
+      const textStroke = this.ereaderSettings.textStroke / 100
 
       return {
         '*': {
@@ -597,6 +597,23 @@ export default {
         snap: true,
         manager: 'continuous',
         flow: 'paginated'
+      })
+      reader.rendition.hooks.content.register((contents) => {
+        // Lexend font option: the book is rendered in iframes that do not get the page's font faces
+        const style = contents.document.createElement('style')
+        style.textContent = `@font-face { font-family: 'Lexend'; font-weight: 100 900; font-display: swap; src: url('${window.location.origin}${this.$config.routerBasePath}/fonts/Lexend/Lexend.woff2') format('woff2'); }`
+        contents.document.head.appendChild(style)
+        // epub.js rewrites the addresses of the book's images to blob: URLs while loading it, which also breaks links that
+        // start with an image's name (Gutenberg's illustrations link to "<image>.wrap-0.html.xhtml" pages): following one
+        // would open an empty page, so a click on them is just a click on the page
+        contents.document.addEventListener(
+          'click',
+          (event) => {
+            const link = event.target.closest?.('a[href]')
+            if (link && /^(blob|data):/i.test(link.getAttribute('href'))) event.preventDefault()
+          },
+          true
+        )
       })
 
       // load saved progress

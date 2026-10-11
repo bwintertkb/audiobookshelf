@@ -69,6 +69,12 @@ With a transcript made from the ebook, open the book with **Read** while the aud
 
 This uses the [CSS Custom Highlight API](https://developer.mozilla.org/en-US/docs/Web/API/CSS_Custom_Highlight_API) (Chrome/Edge 105+, Safari 17.2+, Firefox 140+); older browsers highlight the sentence only.
 
+## Reading settings
+
+The way books and transcripts look is saved on your account, so it is the same in every book, in the transcript and in the book, on the web and in the app: the colour scheme, the font (Sans, Serif or Lexend; the ebook reader on the web has Lexend too), the text size (one size for the book and the transcript, which keeps it between 75% and 200%), the book's line spacing, boldness and layout, the transcript's layout, the highlighted words, the highlighter pen, **Reading and listening stay in the same place**, the sleep timer's finish and the app reader's full page (player bar and location bar hidden). A change on one device shows on the others right away (socket `reading_settings_updated`); changes made offline in the app are sent when it connects. Device settings (volume keys, keep the screen awake, the lock screen sentence) stay on the device.
+
+The first time a device connects after the update, the account takes the settings chosen on that device that it does not have yet (not the defaults, so a browser that was never set up does not undo the phone's choices); after that, devices take the account's settings when they connect.
+
 ## Highlights and notes
 
 Highlight the transcript or the book like on a Kindle:
@@ -100,7 +106,7 @@ The `feature/transcripts` branch of the Audiobookshelf app (`audiobookshelf-app`
 
 ## Storage
 
-Highlights and notes are stored per user at `<metadata>/items/<libraryItemId>/annotations/<userId>.json` (removed with the item, included in backups).
+Highlights and notes are stored per user at `<metadata>/items/<libraryItemId>/annotations/<userId>.json` (removed with the item, included in backups). Reading settings are stored in the user's database record (`extraData.readingSettings`).
 
 Transcripts are stored gzipped at `<metadata>/items/<libraryItemId>/transcript.json.gz`, next to the item's cover and `metadata.json` (also when "store metadata with item" is enabled, so nothing is written to the media folders). They are deleted together with the library item, and included in backups. A 15 hour book is about 8 MB of JSON, 1.5 MB gzipped. The item record keeps a short summary in `extraData.transcript`, which the API exposes as `hasTranscript` on the expanded item.
 
@@ -115,6 +121,8 @@ Transcripts are stored gzipped at `<metadata>/items/<libraryItemId>/transcript.j
 | GET    | `/api/me/item/:id/annotations` | the user's highlights and notes in the book: `{ annotations: [{ id, start, end, text, color, note, createdAt, updatedAt }] }` in book order (`start` / `end`: start times of the first and last transcript word) |
 | PUT    | `/api/me/item/:id/annotations/:annotationId` | create or replace a highlight (the client chooses the id, 8–64 letters, digits, `-` or `_`; `color`: yellow, blue, pink or orange). The copy with the newer `updatedAt` is kept, so changes made offline can be sent later. Emits `annotations_updated` `{ libraryItemId }` to the user's other clients |
 | DELETE | `/api/me/item/:id/annotations/:annotationId` | delete a highlight (404 if it is not there) |
+| GET    | `/api/me/reading-settings` | the user's reading settings: `{ settings: { readingTheme, readingFont, readingFontScale, ... } }` (only the ones saved; rules in `server/utils/readingSettings.js`) |
+| PATCH  | `/api/me/reading-settings` | change some of them (400 for an unknown setting or a value out of range); returns all of them and emits `reading_settings_updated` `{ settings }` to the user's clients |
 | GET    | `/api/items/:id/transcript/audio/:fileid?start=<sec>&duration=<sec>` | part of an audio file (by inode) decoded with ffmpeg to raw 16 kHz mono 16-bit PCM (`s16le`), for speech recognition in the browser; at most 900 s per request; requires "Can Update" |
 
 `GET /api/items/:id?expanded=1` includes `"hasTranscript": true|false`. Uploads and deletes emit the `item_updated` socket event. Uploads are validated: `version` must be 1, `libraryItemId` must match the URL, every segment/word time must be a number within the item's playable duration (+1 s), and word start times must not decrease. Limits: 64 MB uploaded, 256 MB after decompression.

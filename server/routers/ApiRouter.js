@@ -192,6 +192,8 @@ class ApiRouter {
     this.router.post('/me/item/:id/bookmark', MeController.createBookmark.bind(this))
     this.router.patch('/me/item/:id/bookmark', MeController.updateBookmark.bind(this))
     this.router.delete('/me/item/:id/bookmark/:time', MeController.removeBookmark.bind(this))
+    this.router.get('/me/reading-settings', MeController.getReadingSettings.bind(MeController))
+    this.router.patch('/me/reading-settings', MeController.updateReadingSettings.bind(MeController))
     this.router.get('/me/item/:id/annotations', MeController.getAnnotations.bind(MeController))
     this.router.put('/me/item/:id/annotations/:annotationId', MeController.saveAnnotation.bind(MeController))
     this.router.delete('/me/item/:id/annotations/:annotationId', MeController.removeAnnotation.bind(MeController))

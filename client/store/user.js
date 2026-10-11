@@ -1,3 +1,5 @@
+import { ReadingSettingsSync, takeLegacyReadingSettings, validReadingSettings } from '@/players/readingSettings'
+
 export const state = () => ({
   user: null,
   accessToken: null,
@@ -23,13 +25,20 @@ export const state = () => ({
     transcriptEngine: 'browser',
     transcriptHelperUrl: 'http://127.0.0.1:8765',
     showTranscriptPanel: false,
-    transcriptFontScale: 1,
     // Read-along: words highlighted around the narrated word (transcript panel and ebook reader)
     readAlongWords: 3,
     // Transcript panel: 'book' lays out ebook transcripts like the book (paragraphs), 'lines' shows a sentence per line
     transcriptLayout: 'book',
-    // Transcript panel font: 'sans', 'serif' or 'lexend' ('': serif in the book layout, sans otherwise)
-    transcriptFont: '',
+    // Saved on the account with the other reading settings (players/readingSettings.js): the font of the book and the
+    // transcript ('sans', 'serif' or 'lexend'; '': serif, sans in the transcript's lines layout), text size (%), the
+    // book's line spacing, boldness and layout, and the app's full page reader
+    readingFont: '',
+    readingFontScale: 100,
+    readingLineSpacing: 115,
+    readingTextStroke: 0,
+    readingSpread: 'auto',
+    readerHidePlayer: false,
+    readerShowInfo: true,
     // Reading the ebook while its audio is not playing moves the listening position along; opening the ebook goes to where you stopped listening
     syncReadingListening: true,
     // When a sleep timer ends: 'sentence' or 'paragraph' finishes it first (books with a transcript), 'off' stops right away
@@ -43,6 +52,32 @@ export const state = () => ({
     readingTheme: ''
   }
 })
+
+/** Reading settings kept in step with the account (players/readingSettings.js) */
+let readingSync = null
+function getReadingSync(store) {
+  if (!readingSync) {
+    readingSync = new ReadingSettingsSync({
+      request: (method, path, body) => (method === 'GET' ? store.$axios.$get(path) : store.$axios.$patch(path, body)),
+      current: () => validReadingSettings(store.state.user.settings),
+      apply: (settings) => store.dispatch('user/applyReadingSettings', settings)
+    })
+  }
+  return readingSync
+}
+
+/**
+ * @param {Object} settings
+ * @param {Object} payload
+ * @returns {Object} the settings in `payload` that change `settings`
+ */
+function changedSettings(settings, payload) {
+  const changed = {}
+  for (const key in settings) {
+    if (payload[key] !== undefined && settings[key] !== payload[key]) changed[key] = payload[key]
+  }
+  return changed
+}
 
 export const getters = {
   getIsRoot: (state) => state.user && state.user.type === 'root',
@@ -137,37 +172,48 @@ export const actions = {
   updateUserSettings({ state, commit }, payload) {
     if (!payload) return false
 
-    let hasChanges = false
-    const existingSettings = { ...state.settings }
-    for (const key in existingSettings) {
-      if (payload[key] !== undefined && existingSettings[key] !== payload[key]) {
-        hasChanges = true
-        existingSettings[key] = payload[key]
-      }
-    }
-    if (hasChanges) {
-      commit('setSettings', existingSettings)
+    const changed = changedSettings(state.settings, payload)
+    if (Object.keys(changed).length) {
+      commit('setSettings', { ...state.settings, ...changed })
       this.$eventBus.$emit('user-settings', state.settings)
+      // Reading settings are saved on the account too
+      const reading = validReadingSettings(changed)
+      if (Object.keys(reading).length) getReadingSync(this).changed(reading)
     }
+  },
+  /** Reading settings of the account (loaded, or changed on another device): used here, not sent back */
+  applyReadingSettings({ state, commit }, settings) {
+    const changed = changedSettings(state.settings, settings || {})
+    if (!Object.keys(changed).length) return
+    commit('setSettings', { ...state.settings, ...changed })
+    this.$eventBus.$emit('user-settings', state.settings)
+  },
+  /** Connected: the reading settings changed here are saved on the account, then the account's are used */
+  loadReadingSettings() {
+    return getReadingSync(this).load()
+  },
+  /** socket reading_settings_updated */
+  receivedReadingSettings(context, settings) {
+    getReadingSync(this).received(settings)
   },
   loadUserSettings({ state, commit }) {
     // Load settings from local storage
+    let userSettingsFromLocal = null
     try {
-      let userSettingsFromLocal = localStorage.getItem('userSettings')
-      if (userSettingsFromLocal) {
-        userSettingsFromLocal = JSON.parse(userSettingsFromLocal)
-        const userSettings = { ...state.settings }
-        for (const key in userSettings) {
-          if (userSettingsFromLocal[key] !== undefined) {
-            userSettings[key] = userSettingsFromLocal[key]
-          }
-        }
-        commit('setSettings', userSettings)
-        this.$eventBus.$emit('user-settings', state.settings)
-      }
+      userSettingsFromLocal = JSON.parse(localStorage.getItem('userSettings') || 'null')
     } catch (error) {
       console.error('Failed to load userSettings from local storage', error)
     }
+    const userSettings = { ...state.settings }
+    for (const key in userSettings) {
+      if (userSettingsFromLocal?.[key] !== undefined) {
+        userSettings[key] = userSettingsFromLocal[key]
+      }
+    }
+    // Once: the reading settings kept before they were saved on the account (ebook reader, transcript font and size)
+    Object.assign(userSettings, takeLegacyReadingSettings(localStorage, userSettingsFromLocal || {}))
+    commit('setSettings', userSettings)
+    this.$eventBus.$emit('user-settings', state.settings)
   },
   refreshToken({ state, commit }) {
     return this.$axios

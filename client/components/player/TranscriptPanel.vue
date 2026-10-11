@@ -32,16 +32,27 @@
       <div class="flex items-center">
         <p class="w-28 shrink-0 transcript-muted">{{ $strings.LabelTheme }}</p>
         <div class="flex items-center gap-1.5" role="radiogroup" :aria-label="$strings.LabelTheme">
-          <button v-for="theme in themeItems" :key="theme.value" class="transcript-theme-swatch" :class="{ 'transcript-theme-selected': theme.value === readingThemeValue }" :style="{ backgroundColor: theme.bg, color: theme.text }" role="radio" :aria-checked="theme.value === readingThemeValue ? 'true' : 'false'" :aria-label="theme.label" :title="theme.label" @click="readingThemeValue = theme.value">
+          <button
+            v-for="theme in themeItems"
+            :key="theme.value"
+            class="transcript-theme-swatch"
+            :class="{ 'transcript-theme-selected': theme.value === readingThemeValue }"
+            :style="{ backgroundColor: theme.bg, color: theme.text }"
+            role="radio"
+            :aria-checked="theme.value === readingThemeValue ? 'true' : 'false'"
+            :aria-label="theme.label"
+            :title="theme.label"
+            @click="readingThemeValue = theme.value"
+          >
             Aa
           </button>
         </div>
       </div>
       <div class="flex items-center">
         <p class="w-28 shrink-0 transcript-muted">{{ $strings.LabelFontScale }}</p>
-        <button class="transcript-icon-btn" :disabled="fontScale <= minFontScale" :aria-label="$strings.LabelFontScale + ' -'" @click="changeFontScale(-0.125)"><span class="material-symbols text-xl">text_decrease</span></button>
+        <button class="transcript-icon-btn" :disabled="fontScale <= minFontScale" :aria-label="$strings.LabelFontScale + ' -'" @click="changeFontScale(-0.1)"><span class="material-symbols text-xl">text_decrease</span></button>
         <p class="w-12 text-center">{{ Math.round(fontScale * 100) }}%</p>
-        <button class="transcript-icon-btn" :disabled="fontScale >= maxFontScale" :aria-label="$strings.LabelFontScale + ' +'" @click="changeFontScale(0.125)"><span class="material-symbols text-xl">text_increase</span></button>
+        <button class="transcript-icon-btn" :disabled="fontScale >= maxFontScale" :aria-label="$strings.LabelFontScale + ' +'" @click="changeFontScale(0.1)"><span class="material-symbols text-xl">text_increase</span></button>
       </div>
       <div class="flex items-center">
         <p class="w-28 shrink-0 transcript-muted">{{ $strings.LabelFontFamily }}</p>
@@ -110,6 +121,7 @@ import { ANNOTATION_COLORS, ANNOTATION_SWATCHES, annotationWordRanges, annotatio
 import { getAnnotationStore } from '@/players/annotationStore'
 import { READING_THEMES, READING_THEME_NAMES, readingTheme, readingThemeName, readingThemeStyle } from '@/players/readingThemes'
 import { loadTranscript as fetchTranscript } from '@/players/transcriptCache'
+import { TRANSCRIPT_FONT_SCALE, transcriptFontScale } from '@/players/readingSettings'
 
 const OVERSCAN_PX = 600
 const BASE_FONT_SIZE = 16
@@ -164,9 +176,8 @@ export default {
       searchQuery: '',
       searchResults: [],
       searchPosition: -1,
-      fontScale: 1,
-      minFontScale: 0.75,
-      maxFontScale: 2,
+      minFontScale: TRANSCRIPT_FONT_SCALE.min,
+      maxFontScale: TRANSCRIPT_FONT_SCALE.max,
       popup: null,
       swatches: ANNOTATION_SWATCHES,
       // The highlighted words are one highlight, spaces included; without the API each word is highlighted
@@ -198,6 +209,9 @@ export default {
     bookLayout() {
       if (this.transcript) this.setTranscript(this.transcript)
     },
+    fontSizePx() {
+      this.$nextTick(this.relayout)
+    },
     currentFont(font) {
       this.$nextTick(this.relayout)
       // Row heights change again once the font file has loaded
@@ -209,6 +223,10 @@ export default {
     }
   },
   computed: {
+    /** Text size: the reading text size saved on the account, shared with the ebook reader */
+    fontScale() {
+      return transcriptFontScale(this.userSetting('readingFontScale'))
+    },
     fontSizePx() {
       return Math.round(BASE_FONT_SIZE * this.fontScale)
     },
@@ -238,7 +256,8 @@ export default {
       return this.transcriptSource === 'ebook' && this.userSetting('transcriptLayout') !== 'lines'
     },
     currentFont() {
-      const value = this.userSetting('transcriptFont') || (this.bookLayout ? 'serif' : 'sans')
+      // The reading font saved on the account, shared with the ebook reader
+      const value = this.userSetting('readingFont') || (this.bookLayout ? 'serif' : 'sans')
       return FONTS.find((font) => font.value === value) || FONTS[0]
     },
     sidePaddingPx() {
@@ -249,7 +268,7 @@ export default {
         return this.currentFont.value
       },
       set(value) {
-        this.$store.dispatch('user/updateUserSettings', { transcriptFont: value })
+        this.$store.dispatch('user/updateUserSettings', { readingFont: value })
       }
     },
     fontItems() {
@@ -885,11 +904,9 @@ export default {
     },
 
     changeFontScale(delta) {
-      const scale = Math.min(this.maxFontScale, Math.max(this.minFontScale, Math.round((this.fontScale + delta) * 1000) / 1000))
+      const scale = Math.min(this.maxFontScale, Math.max(this.minFontScale, Math.round((this.fontScale + delta) * 100) / 100))
       if (scale === this.fontScale) return
-      this.fontScale = scale
-      this.$store.dispatch('user/updateUserSettings', { transcriptFontScale: scale })
-      this.$nextTick(this.relayout)
+      this.$store.dispatch('user/updateUserSettings', { readingFontScale: Math.round(scale * 100) })
     }
   },
   created() {
@@ -918,7 +935,6 @@ export default {
     this.followCurrent()
   },
   mounted() {
-    this.fontScale = this.$store.getters['user/getUserSetting']('transcriptFontScale') || 1
     if (window.ResizeObserver && this.$refs.scroller) {
       this.resizeObserver = new ResizeObserver(() => this.onResize())
       this.resizeObserver.observe(this.$refs.scroller)

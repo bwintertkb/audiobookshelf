@@ -120,7 +120,7 @@ function mountPanel({ libraryItemId = 'book-1', time = 0, playing = true, librar
     const id = url.split('/')[3]
     return Promise.resolve(getBook(id).transcript)
   })
-  const settings = Vue.observable({ transcriptFontScale: 1, readAlongWords })
+  const settings = Vue.observable({ readingFontScale: 100, readAlongWords })
   const mocks = { ...baseMocks(settings), $axios: { $get: axiosGet, $request: annotationRequest() } }
   const stubs = STUBS
   const propsData = { libraryItem: libraryItem || book.libraryItem, chapters: book.chapters, getCurrentTime: () => clock.getCurrentTime(), playing }
@@ -368,7 +368,7 @@ describe('<TranscriptPanel />', () => {
     const chapters = [{ id: 0, start: 0, end: 100, title: 'Chapter 1' }]
 
     function mountEbookPanel({ settings = {}, request = annotationRequest(), time = 21 } = {}) {
-      const observableSettings = Vue.observable({ transcriptLayout: 'book', transcriptFont: '', readAlongWords: 3, ...settings })
+      const observableSettings = Vue.observable({ transcriptLayout: 'book', readingFont: '', readAlongWords: 3, ...settings })
       const axios = { $get: cy.stub().callsFake((url) => (url.includes('expanded') ? Promise.resolve({ ...libraryItem, expanded: true }) : Promise.resolve(transcript))), $request: request }
       const mocks = { ...baseMocks(observableSettings), $axios: axios }
       return cy.mount(TranscriptPanel, { propsData: { libraryItem, chapters, getCurrentTime: () => time, playing: false }, mocks, stubs: STUBS }).then(({ wrapper }) => {
@@ -418,7 +418,7 @@ describe('<TranscriptPanel />', () => {
           .should(($el) => expect($el[0].style.fontFamily).to.equal(''))
 
         cy.get('.transcript-display-menu').contains('button', 'Lexend').click()
-        cy.then(() => expect(settings.transcriptFont).to.equal('lexend'))
+        cy.then(() => expect(settings.readingFont).to.equal('lexend'))
         cy.get('[data-wi="0"]')
           .closest('[style*="translateY"]')
           .should(($el) => expect($el[0].style.fontFamily).to.contain('Lexend'))

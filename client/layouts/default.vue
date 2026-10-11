@@ -154,6 +154,8 @@ export default {
       }
 
       this.isSocketAuthenticated = true
+      // Reading settings saved on the account (theme, font, text size, ...)
+      this.$store.dispatch('user/loadReadingSettings')
     },
     streamOpen(stream) {
       if (this.$refs.mediaPlayerContainer) this.$refs.mediaPlayerContainer.streamOpen(stream)
@@ -270,6 +272,9 @@ export default {
       }
     },
     /** Highlights or notes changed (in another tab or on another device): reload them where the book is open */
+    readingSettingsUpdated({ settings }) {
+      this.$store.dispatch('user/receivedReadingSettings', settings)
+    },
     annotationsUpdated({ libraryItemId }) {
       const store = getAnnotationStore(this.$axios)
       if (store.items.has(libraryItemId)) store.load(libraryItemId)
@@ -450,6 +455,7 @@ export default {
       this.socket.on('user_session_closed', this.userSessionClosed)
       this.socket.on('user_item_progress_updated', this.userMediaProgressUpdate)
       this.socket.on('annotations_updated', this.annotationsUpdated)
+      this.socket.on('reading_settings_updated', this.readingSettingsUpdated)
 
       // Collection Listeners
       this.socket.on('collection_added', this.collectionAdded)

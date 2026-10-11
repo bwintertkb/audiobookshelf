@@ -38,13 +38,7 @@
 
     <!-- TOC side nav -->
     <div v-if="tocOpen" class="w-full h-full overflow-y-scroll absolute inset-0 bg-black/20 z-20" @click.stop.prevent="toggleToC"></div>
-    <div
-      v-if="isEpub"
-      class="w-96 h-full max-h-full absolute top-0 left-0 shadow-xl transition-transform z-30"
-      :style="themeStyle"
-      :class="tocOpen ? 'translate-x-0' : '-translate-x-96'"
-      @click.stop.prevent
-    >
+    <div v-if="isEpub" class="w-96 h-full max-h-full absolute top-0 left-0 shadow-xl transition-transform z-30" :style="themeStyle" :class="tocOpen ? 'translate-x-0' : '-translate-x-96'" @click.stop.prevent>
       <div class="flex flex-col p-4 h-full">
         <div class="flex items-center mb-2">
           <button @click.stop.prevent="toggleToC" type="button" aria-label="Close table of contents" class="inline-flex opacity-80 hover:opacity-100">
@@ -146,6 +140,7 @@
 import { READ_ALONG_WORD_COUNTS, readAlongWordCount } from '@/players/transcriptUtils'
 import { ANNOTATION_SWATCHES, highlighterColor } from '@/players/annotations'
 import { READING_THEME_NAMES, readingTheme, readingThemeName } from '@/players/readingThemes'
+import { readerFontFamily, readingFontOf } from '@/players/readingSettings'
 
 export default {
   data() {
@@ -179,7 +174,13 @@ export default {
     readingThemeValue(value) {
       if (this.ereaderSettings.theme === value) return
       this.ereaderSettings.theme = value
-      this.settingsUpdated()
+      this.applySettings()
+    },
+    /** Formatting changed on another device or in the transcript */
+    accountFormatting(formatting) {
+      if (Object.keys(formatting).every((key) => this.ereaderSettings[key] === formatting[key])) return
+      Object.assign(this.ereaderSettings, formatting)
+      this.applySettings()
     },
     show(newVal) {
       if (newVal) {
@@ -207,6 +208,17 @@ export default {
       },
       set(value) {
         this.$store.dispatch('user/updateUserSettings', { readingTheme: value })
+      }
+    },
+    /** Formatting saved on the account with the other reading settings (players/readingSettings.js): the same in every book */
+    accountFormatting() {
+      const setting = this.$store.getters['user/getUserSetting']
+      return {
+        font: readerFontFamily(setting('readingFont') || 'serif'),
+        fontScale: setting('readingFontScale') || 100,
+        lineSpacing: setting('readingLineSpacing') || 115,
+        textStroke: setting('readingTextStroke') || 0,
+        spread: setting('readingSpread') || 'auto'
       }
     },
     readingThemeItems() {
@@ -284,6 +296,10 @@ export default {
           {
             text: 'Serif',
             value: 'serif'
+          },
+          {
+            text: 'Lexend',
+            value: 'Lexend, sans-serif'
           }
         ]
       }
@@ -385,7 +401,20 @@ export default {
         this.loadEreaderSettings()
       }
     },
+    /** Settings changed here: the formatting is saved on the account */
     settingsUpdated() {
+      const formatting = this.accountFormatting
+      const settings = this.ereaderSettings
+      const changes = {}
+      if (settings.font !== formatting.font) changes.readingFont = readingFontOf(settings.font)
+      if (settings.fontScale !== formatting.fontScale) changes.readingFontScale = settings.fontScale
+      if (settings.lineSpacing !== formatting.lineSpacing) changes.readingLineSpacing = settings.lineSpacing
+      if (settings.textStroke !== formatting.textStroke) changes.readingTextStroke = settings.textStroke
+      if (settings.spread !== formatting.spread) changes.readingSpread = settings.spread
+      if (Object.keys(changes).length) this.$store.dispatch('user/updateUserSettings', changes)
+      this.applySettings()
+    },
+    applySettings() {
       this.$refs.readerComponent?.updateSettings?.(this.ereaderSettings)
       localStorage.setItem('ereaderSettings', JSON.stringify(this.ereaderSettings))
     },
@@ -490,12 +519,14 @@ export default {
           }
           // The reader's theme became the reading theme shared with the transcript: keep the one chosen before
           if (!this.$store.getters['user/getUserSetting']('readingTheme')) this.readingThemeValue = readingThemeName(this.ereaderSettings.theme)
-          this.ereaderSettings.theme = this.readingThemeValue
-          this.settingsUpdated()
         }
       } catch (error) {
         console.error('Failed to load ereader settings', error)
       }
+      // The formatting saved on the account
+      Object.assign(this.ereaderSettings, this.accountFormatting)
+      this.ereaderSettings.theme = this.readingThemeValue
+      this.applySettings()
     },
     init() {
       this.registerListeners()
