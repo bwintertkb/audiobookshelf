@@ -17,6 +17,11 @@
           <ui-text-input v-model="customTime" type="number" step="any" min="0.1" :placeholder="$strings.LabelTimeInMinutes" class="w-48" />
           <ui-btn color="bg-success" type="submit" :padding-x="0" class="h-9 w-18 flex items-center justify-center ml-1">{{ $strings.ButtonSubmit }}</ui-btn>
         </form>
+        <!-- Books with a transcript: a timer can finish the sentence or paragraph being read instead of stopping mid-word -->
+        <div v-if="hasTranscript" class="flex flex-col items-center px-4 pb-3">
+          <p class="text-sm text-gray-300 pb-1">{{ $strings.LabelSleepTimerFinish }}</p>
+          <ui-toggle-btns v-model="finish" :items="finishItems" class="text-sm" />
+        </div>
       </div>
       <div v-if="timerSet" class="w-full p-4">
         <div class="mb-4 h-px w-full bg-white/10" />
@@ -51,7 +56,8 @@ export default {
     timerSet: Boolean,
     timerType: String,
     remaining: Number,
-    hasChapters: Boolean
+    hasChapters: Boolean,
+    hasTranscript: Boolean
   },
   data() {
     return {
@@ -66,6 +72,22 @@ export default {
       set(val) {
         this.$emit('input', val)
       }
+    },
+    /** What a timer does when it ends (user setting): 'off' stops right away, 'sentence' / 'paragraph' finishes it first */
+    finish: {
+      get() {
+        return this.$store.getters['user/getUserSetting']('sleepTimerFinish') || 'sentence'
+      },
+      set(value) {
+        this.$store.dispatch('user/updateUserSettings', { sleepTimerFinish: value })
+      }
+    },
+    finishItems() {
+      return [
+        { text: this.$strings.LabelSleepTimerFinishOff, value: 'off' },
+        { text: this.$strings.LabelSleepTimerFinishSentence, value: 'sentence' },
+        { text: this.$strings.LabelSleepTimerFinishParagraph, value: 'paragraph' }
+      ]
     },
     sleepTimes() {
       const times = [

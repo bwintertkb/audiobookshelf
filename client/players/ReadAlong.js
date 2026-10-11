@@ -1,9 +1,11 @@
 import { DEFAULT_READ_ALONG_WORDS, buildTranscriptIndex, findPosition, highlightedWords } from './transcriptUtils'
+import { ANNOTATION_COLORS, ANNOTATION_COLOR_VALUES, annotationWordRanges, annotationsAtWord } from './annotations'
 
 /**
  * Read-along in the EPUB reader: highlights the narrated words and sentence of an ebook transcript
  * (source "ebook", segments carry their EPUB spine position) in the rendered book, follows the
- * narration from page to page and maps clicks on words back to audio times.
+ * narration from page to page and maps clicks on words back to audio times. It also draws the user's
+ * highlights (annotations.js) and reports words the user selects or right-clicks.
  *
  * Words are found in a rendered section by tokenizing its document the same way the transcribe helper
  * read the EPUB (tools/transcribe-helper/transcribe_helper/ebook.py) and matching tokens in order.
@@ -20,18 +22,25 @@ const EPUB_NS = 'http://www.idpf.org/2007/ops'
 const LOOKAHEAD_TOKENS = 4000
 const NAVIGATION_TIMEOUT_MS = 3000
 
-/** Range.START_TO_START */
+/** Range.START_TO_START, START_TO_END and END_TO_START (compareBoundaryPoints) */
 const START_TO_START = 0
+const START_TO_END = 1
+const END_TO_START = 3
 
 /** How long a position before a requested start is ignored (see update) */
 const START_SETTLE_MS = 5000
+/** How long turning to a chosen position (goToTime) keeps trying */
+const GO_TO_TIMEOUT_MS = 8000
 /** Time epub.js gets to display the page again after a resize before following continues */
 const REDISPLAY_SETTLE_MS = 1000
 
 export const WORD_HIGHLIGHT = 'abs-readalong-word'
 export const SENTENCE_HIGHLIGHT = 'abs-readalong-sentence'
+/** The user's highlights, one CSS Custom Highlight per colour */
+export const ANNOTATION_HIGHLIGHT_PREFIX = 'abs-readalong-annotation-'
 const HIGHLIGHT_CSS = `::highlight(${WORD_HIGHLIGHT}) { background-color: rgba(250, 204, 21, 0.55); }
-::highlight(${SENTENCE_HIGHLIGHT}) { background-color: rgba(250, 204, 21, 0.16); }`
+::highlight(${SENTENCE_HIGHLIGHT}) { background-color: rgba(250, 204, 21, 0.16); }
+${ANNOTATION_COLORS.map((color) => `::highlight(${ANNOTATION_HIGHLIGHT_PREFIX}${color}) { background-color: ${ANNOTATION_COLOR_VALUES[color]}; }`).join('\n')}`
 
 function isSkipped(element) {
   const tag = element.localName
@@ -95,13 +104,19 @@ export default class ReadAlong {
    * @param {number} [options.highlightWords] - words highlighted around the narrated one (1, 3 or 5)
    * @param {(time: number) => void} [options.onSeek] - a word was clicked
    * @param {() => void} [options.onFollowChanged] - following was paused or resumed
+   * @param {(selection: {first: number, last: number, rect: Object, annotation: Object|null}) => void} [options.onSelect] - words were
+   *   selected, right-clicked or long-pressed (rect: where they are in the reader's window)
    */
-  constructor({ rendition, transcript, highlightWords = DEFAULT_READ_ALONG_WORDS, onSeek, onFollowChanged }) {
+  constructor({ rendition, transcript, highlightWords = DEFAULT_READ_ALONG_WORDS, onSeek, onFollowChanged, onSelect }) {
     this.rendition = rendition
     this.transcript = transcript
     this.highlightWords = highlightWords
     this.onSeek = onSeek
     this.onFollowChanged = onFollowChanged
+    this.onSelect = onSelect
+    this.annotations = []
+    this.annotationRanges = []
+    this.annotationCfis = [] // epub.js annotations drawn without the Highlight API
     this.index = buildTranscriptIndex(transcript)
     this.following = true
     this.sections = new Map() // spine index -> { doc, window, contents, firstWord, ranges }
@@ -154,8 +169,11 @@ export default class ReadAlong {
     if (!this.listening.has(contents.document)) {
       this.listening.add(contents.document)
       contents.document.addEventListener('click', (event) => this.onDocumentClick(section.index, event))
+      contents.document.addEventListener('mouseup', (event) => this.onDocumentMouseUp(section.index, event))
+      contents.document.addEventListener('contextmenu', (event) => this.onDocumentContextMenu(section.index, event))
     }
     if (this.pendingSpine === section.index) this.pendingSpine = null
+    this.drawAnnotations(entry)
     // A (re-)rendered section has new nodes: highlight again on the next update, even if the time did not change
     this.dirty = true
   }
@@ -263,6 +281,7 @@ export default class ReadAlong {
     }
     // Retried on every tick until the word is on screen (a navigation may still be running)
     if (this.following && this.followPending) this.follow()
+    this.pump()
   }
 
   /** Number of words highlighted around the narrated word */
@@ -287,8 +306,13 @@ export default class ReadAlong {
     sentence.setEnd(last.endContainer, last.endOffset)
 
     if (win?.CSS?.highlights && win.Highlight) {
-      win.CSS.highlights.set(WORD_HIGHLIGHT, new win.Highlight(this.wordGroupRange(entry, range)))
-      win.CSS.highlights.set(SENTENCE_HIGHLIGHT, new win.Highlight(sentence))
+      // Over the user's highlights
+      const words = new win.Highlight(this.wordGroupRange(entry, range))
+      words.priority = 2
+      const sentenceHighlight = new win.Highlight(sentence)
+      sentenceHighlight.priority = 1
+      win.CSS.highlights.set(WORD_HIGHLIGHT, words)
+      win.CSS.highlights.set(SENTENCE_HIGHLIGHT, sentenceHighlight)
       this.highlightWindow = win
     } else {
       // No Highlight API: highlight the sentence with an epub.js annotation (only when it changes)
@@ -398,6 +422,7 @@ export default class ReadAlong {
   }
 
   resumeFollowing() {
+    this.goToWord = null
     this.following = true
     this.followPending = true
     this.onFollowChanged?.(true)
@@ -408,6 +433,8 @@ export default class ReadAlong {
   onDocumentClick(spine, event) {
     if (event.target?.closest?.('a')) return
     const doc = event.target?.ownerDocument
+    // Selecting text: the selection gets the highlight menu instead (onDocumentMouseUp)
+    if (doc?.getSelection && !doc.getSelection().isCollapsed) return
     const point = this.caretFromPoint(doc, event.clientX, event.clientY)
     if (!point) return
     const wordIndex = this.wordAtPoint(spine, point.node, point.offset)
@@ -513,10 +540,220 @@ export default class ReadAlong {
     return next === undefined ? null : this.index.wordStarts[this.spineWords.get(next).firstWord]
   }
 
+  // ------------------------------------------------------------------ highlights and selections
+  /** The user's highlights in this book (annotations.js) */
+  setAnnotations(annotations) {
+    this.annotations = annotations || []
+    this.annotationRanges = annotationWordRanges(this.index, this.annotations)
+    for (const spine of [...this.sections.keys()]) {
+      const entry = this.sectionEntry(spine)
+      if (entry) this.drawAnnotations(entry)
+    }
+  }
+
+  /** A document range from word first to word last of a rendered section (null if none of them is mapped) */
+  wordsRange(entry, first, last) {
+    let from = Math.max(first, entry.firstWord) - entry.firstWord
+    let to = Math.min(last, entry.firstWord + entry.ranges.length - 1) - entry.firstWord
+    while (from <= to && !entry.ranges[from]) from++
+    while (to >= from && !entry.ranges[to]) to--
+    if (from > to) return null
+    const range = entry.doc.createRange()
+    range.setStart(entry.ranges[from].startContainer, entry.ranges[from].startOffset)
+    range.setEnd(entry.ranges[to].endContainer, entry.ranges[to].endOffset)
+    return range
+  }
+
+  drawAnnotations(entry) {
+    const win = entry.window
+    const sectionLast = entry.firstWord + entry.ranges.length - 1
+    const byColor = new Map(ANNOTATION_COLORS.map((color) => [color, []]))
+    for (const { color, first, last } of this.annotationRanges) {
+      if (last < entry.firstWord || first > sectionLast) continue
+      const range = this.wordsRange(entry, first, last)
+      if (range) byColor.get(color).push(range)
+    }
+    if (win?.CSS?.highlights && win.Highlight) {
+      for (const [color, ranges] of byColor) {
+        if (ranges.length) win.CSS.highlights.set(ANNOTATION_HIGHLIGHT_PREFIX + color, new win.Highlight(...ranges))
+        else win.CSS.highlights.delete(ANNOTATION_HIGHLIGHT_PREFIX + color)
+      }
+      return
+    }
+    // No Highlight API: epub.js annotations
+    entry.annotationCfis = entry.annotationCfis || []
+    for (const cfi of entry.annotationCfis) this.rendition.annotations.remove(cfi, 'highlight')
+    entry.annotationCfis = []
+    for (const [color, ranges] of byColor) {
+      for (const range of ranges) {
+        const cfi = entry.contents.cfiFromRange(range)
+        this.rendition.annotations.highlight(cfi, {}, null, `abs-readalong-annotation-${color}`, { fill: ANNOTATION_COLOR_VALUES[color], 'fill-opacity': '1', 'mix-blend-mode': 'multiply' })
+        entry.annotationCfis.push(cfi)
+        this.annotationCfis.push(cfi)
+      }
+    }
+  }
+
+  /** Transcript words in a range of a section's document: { first, last } (global word indexes) or null */
+  wordsInRange(spine, range) {
+    const entry = this.sections.get(spine)
+    if (!entry) return null
+    let first = -1
+    let last = -1
+    for (let k = 0; k < entry.ranges.length; k++) {
+      const wordRange = entry.ranges[k]
+      if (!wordRange) continue
+      // Overlaps: the word ends after the range starts (START_TO_END: this end vs the range's start) and starts before the range ends
+      if (wordRange.compareBoundaryPoints(START_TO_END, range) <= 0) continue
+      if (wordRange.compareBoundaryPoints(END_TO_START, range) >= 0) break
+      if (first < 0) first = k
+      last = k
+    }
+    return first >= 0 ? { first: entry.firstWord + first, last: entry.firstWord + last } : null
+  }
+
+  /** Where a range of a section's document is in the reader's window */
+  rectInReader(entry, range) {
+    const rect = range.getBoundingClientRect()
+    const frame = entry.window?.frameElement?.getBoundingClientRect() || { left: 0, top: 0 }
+    return { left: frame.left + rect.left, top: frame.top + rect.top, width: rect.width, height: rect.height }
+  }
+
+  /** Words first..last chosen on screen (at a word of them): report them, or the highlight they are in */
+  selectWords(spine, first, last, range) {
+    const entry = this.sections.get(spine)
+    if (!entry || !this.onSelect) return
+    const rect = this.rectInReader(entry, range)
+    if (first === last) {
+      const annotation = annotationsAtWord(this.index, this.annotations, first)[0]
+      if (annotation) {
+        const words = this.annotationRanges.find((r) => r.annotation.id === annotation.id)
+        this.onSelect({ first: words.first, last: words.last, rect, annotation })
+        return
+      }
+    }
+    this.onSelect({ first, last, rect, annotation: null })
+  }
+
+  onDocumentMouseUp(spine, event) {
+    if (event.button !== 0 || !this.onSelect) return
+    const doc = event.target?.ownerDocument
+    // After the browser updated the selection
+    setTimeout(() => {
+      const selection = doc?.getSelection?.()
+      if (!selection || selection.isCollapsed || !selection.rangeCount) return
+      const range = selection.getRangeAt(0)
+      const words = this.wordsInRange(spine, range)
+      if (words) this.onSelect({ ...words, rect: this.rectInReader(this.sections.get(spine), range), annotation: null })
+    })
+  }
+
+  /** Right-click (or long-press on touch screens) a word: its definition and the highlight menu */
+  onDocumentContextMenu(spine, event) {
+    if (!this.onSelect) return
+    const doc = event.target?.ownerDocument
+    const entry = this.sections.get(spine)
+    const point = this.caretFromPoint(doc, event.clientX, event.clientY)
+    const wordIndex = point && entry ? this.wordAtPoint(spine, point.node, point.offset) : -1
+    if (wordIndex < 0) return
+    event.preventDefault()
+    const selection = doc.getSelection()
+    if (selection && !selection.isCollapsed && selection.rangeCount) {
+      const words = this.wordsInRange(spine, selection.getRangeAt(0))
+      if (words && wordIndex >= words.first && wordIndex <= words.last) {
+        this.onSelect({ ...words, rect: this.rectInReader(entry, selection.getRangeAt(0)), annotation: null })
+        return
+      }
+    }
+    this.selectWords(spine, wordIndex, wordIndex, entry.ranges[wordIndex - entry.firstWord])
+  }
+
+  /** Remove the user's text selection from the book (e.g. after it was highlighted) */
+  clearTextSelection() {
+    for (const entry of this.sections.values()) {
+      try {
+        entry.doc.getSelection()?.removeAllRanges()
+      } catch (error) {
+        // document of a removed section
+      }
+    }
+  }
+
+  // ------------------------------------------------------------------ the page and the audio
+  /** Turn to the page with the word at a time without following the narration (e.g. a highlight chosen in a list) */
+  goToTime(time) {
+    const { word } = findPosition(this.index, time)
+    if (word < 0) return
+    this.pauseFollowing()
+    this.goToWord = { word, since: Date.now() }
+    this.pump()
+  }
+
+  /** Keep turning to the page asked for with goToTime (called on every tick: a section may have to be rendered first) */
+  pump() {
+    const target = this.goToWord
+    if (!target || this.navigating) return
+    if (Date.now() - target.since > GO_TO_TIMEOUT_MS) {
+      this.goToWord = null
+      return
+    }
+    if (Date.now() < this.redisplayUntil || !this.rendition.views()?.length) return
+    const located = this.wordRange(target.word)
+    if (!located.entry) {
+      if (this.pendingSpine === located.spine && Date.now() - this.pendingSince < 2000) return
+      const section = this.rendition.book.spine.get(located.spine)
+      if (!section) {
+        this.goToWord = null
+        return
+      }
+      this.pendingSpine = located.spine
+      this.pendingSince = Date.now()
+      this.navigate(section.href)
+      return
+    }
+    if (!located.range || this.isVisible(located.entry, located.range)) {
+      this.goToWord = null
+      return
+    }
+    const start = located.range.cloneRange()
+    start.collapse(true)
+    this.navigate(located.entry.contents.cfiFromRange(start))
+  }
+
+  /** Show the narrated position at a time (e.g. where the user stopped listening) and keep it highlighted */
+  showTime(time) {
+    this.startAt(time)
+  }
+
+  /**
+   * Book times the current page covers: from its first narrated word to the first narrated word after it
+   * @returns {{start: number, end: number}|null}
+   */
+  pageTimeRange() {
+    const start = this.firstVisibleWordTime()
+    if (start === null) return null
+    let end = null
+    try {
+      const location = this.rendition.manager ? this.rendition.currentLocation()?.end : null
+      if (location && Number.isInteger(location.index)) end = this.firstWordTimeFrom(location.index, location.cfi)
+    } catch (error) {
+      end = null
+    }
+    return { start, end: end !== null && end >= start ? end : start }
+  }
+
   destroy() {
     this.rendition.off('resized', this.onResized)
     if (this.highlightWindow) this.clearHighlights(this.highlightWindow)
     if (this.annotationCfi) this.rendition.annotations.remove(this.annotationCfi, 'highlight')
+    for (const cfi of this.annotationCfis) this.rendition.annotations.remove(cfi, 'highlight')
+    for (const entry of this.sections.values()) {
+      try {
+        ANNOTATION_COLORS.forEach((color) => entry.window?.CSS?.highlights?.delete(ANNOTATION_HIGHLIGHT_PREFIX + color))
+      } catch (error) {
+        // window of a removed section
+      }
+    }
     this.sections.clear()
   }
 }

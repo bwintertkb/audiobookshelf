@@ -25,7 +25,17 @@ export const state = () => ({
     showTranscriptPanel: false,
     transcriptFontScale: 1,
     // Read-along: words highlighted around the narrated word (transcript panel and ebook reader)
-    readAlongWords: 3
+    readAlongWords: 3,
+    // Transcript panel: 'book' lays out ebook transcripts like the book (paragraphs), 'lines' shows a sentence per line
+    transcriptLayout: 'book',
+    // Transcript panel font: 'sans', 'serif' or 'lexend' ('': serif in the book layout, sans otherwise)
+    transcriptFont: '',
+    // Reading the ebook while its audio is not playing moves the listening position along; opening the ebook goes to where you stopped listening
+    syncReadingListening: true,
+    // When a sleep timer ends: 'sentence' or 'paragraph' finishes it first (books with a transcript), 'off' stops right away
+    sleepTimerFinish: 'sentence',
+    // The browser's media controls show the sentence being read
+    readAlongMediaSession: true
   }
 })
 

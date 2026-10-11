@@ -8,20 +8,40 @@
       <ui-tooltip :text="$strings.ButtonSearch" direction="bottom">
         <button class="transcript-icon-btn" :class="showSearch ? 'text-white' : ''" :aria-label="$strings.ButtonSearch" @click="toggleSearch"><span class="material-symbols text-xl">search</span></button>
       </ui-tooltip>
-      <ui-tooltip :text="readAlongWordsLabel" direction="bottom">
-        <button class="transcript-icon-btn" :aria-label="readAlongWordsLabel" @click="nextReadAlongWords">
-          <span class="material-symbols text-xl">ink_highlighter</span><span class="text-xs font-semibold">{{ readAlongWords }}</span>
-        </button>
+      <ui-tooltip :text="$strings.LabelTranscriptDisplay" direction="bottom">
+        <button class="transcript-icon-btn" :class="showDisplayMenu ? 'text-white' : ''" :aria-label="$strings.LabelTranscriptDisplay" :aria-expanded="showDisplayMenu ? 'true' : 'false'" @click="showDisplayMenu = !showDisplayMenu"><span class="material-symbols text-xl">match_case</span></button>
       </ui-tooltip>
-      <ui-tooltip :text="$strings.LabelFontScale" direction="bottom">
-        <div class="flex items-center">
-          <button class="transcript-icon-btn" :disabled="fontScale <= minFontScale" :aria-label="$strings.LabelFontScale + ' -'" @click="changeFontScale(-0.125)"><span class="material-symbols text-xl">text_decrease</span></button>
-          <button class="transcript-icon-btn" :disabled="fontScale >= maxFontScale" :aria-label="$strings.LabelFontScale + ' +'" @click="changeFontScale(0.125)"><span class="material-symbols text-xl">text_increase</span></button>
-        </div>
+      <ui-tooltip :text="$strings.HeaderNotesAndHighlights" direction="bottom">
+        <button class="transcript-icon-btn" :aria-label="$strings.HeaderNotesAndHighlights" @click="showAnnotations = true"><span class="material-symbols text-xl">sticky_note_2</span></button>
+      </ui-tooltip>
+      <ui-tooltip v-if="canOpenBook" :text="$strings.ButtonOpenInBook" direction="bottom">
+        <button class="transcript-icon-btn" :aria-label="$strings.ButtonOpenInBook" @click="openBook"><span class="material-symbols text-xl">menu_book</span></button>
       </ui-tooltip>
       <ui-tooltip :text="$strings.ButtonClose" direction="bottom">
         <button class="transcript-icon-btn" :aria-label="$strings.ButtonClose" @click="$emit('close')"><span class="material-symbols text-xl">close</span></button>
       </ui-tooltip>
+    </div>
+
+    <!-- Display: text size, font, layout (ebook transcripts), highlighted words -->
+    <div v-if="showDisplayMenu" class="transcript-display-menu px-3 py-2 border-b border-black-200 shrink-0 text-sm space-y-2">
+      <div class="flex items-center">
+        <p class="w-28 shrink-0 text-gray-300">{{ $strings.LabelFontScale }}</p>
+        <button class="transcript-icon-btn" :disabled="fontScale <= minFontScale" :aria-label="$strings.LabelFontScale + ' -'" @click="changeFontScale(-0.125)"><span class="material-symbols text-xl">text_decrease</span></button>
+        <p class="w-12 text-center">{{ Math.round(fontScale * 100) }}%</p>
+        <button class="transcript-icon-btn" :disabled="fontScale >= maxFontScale" :aria-label="$strings.LabelFontScale + ' +'" @click="changeFontScale(0.125)"><span class="material-symbols text-xl">text_increase</span></button>
+      </div>
+      <div class="flex items-center">
+        <p class="w-28 shrink-0 text-gray-300">{{ $strings.LabelFontFamily }}</p>
+        <ui-toggle-btns v-model="fontValue" :items="fontItems" class="transcript-toggle" />
+      </div>
+      <div v-if="transcriptSource === 'ebook'" class="flex items-center">
+        <p class="w-28 shrink-0 text-gray-300">{{ $strings.LabelTranscriptLayout }}</p>
+        <ui-toggle-btns v-model="layoutValue" :items="layoutItems" class="transcript-toggle" />
+      </div>
+      <div class="flex items-center">
+        <p class="w-28 shrink-0 text-gray-300">{{ $strings.LabelReadAlongHighlight }}</p>
+        <ui-toggle-btns v-model="readAlongWordsValue" :items="readAlongWordsItems" class="transcript-toggle" />
+      </div>
     </div>
 
     <div v-if="showSearch" class="flex items-center px-3 py-1.5 border-b border-black-200 shrink-0">
@@ -48,15 +68,23 @@
       </div>
       <p v-else-if="error" class="p-4 text-sm text-gray-300">{{ error }}</p>
 
-      <div v-show="!loading && !error" ref="scroller" class="transcript-scroller absolute inset-0 overflow-y-auto overflow-x-hidden outline-hidden" tabindex="0" @scroll.passive="onScroll" @wheel.passive="stopAutoScroll" @touchstart.passive="stopAutoScroll" @mousedown="onScrollerMousedown" @keydown="onScrollerKeydown" @click="onClick">
+      <div v-show="!loading && !error" ref="scroller" class="transcript-scroller absolute inset-0 overflow-y-auto overflow-x-hidden outline-hidden" tabindex="0" @scroll.passive="onScroll" @wheel.passive="stopAutoScroll" @touchstart.passive="stopAutoScroll" @mousedown="onScrollerMousedown" @mouseup="onMouseUp" @keydown="onScrollerKeydown" @click="onClick" @contextmenu="onContextMenu">
         <div class="relative" :style="{ height: totalHeight + 'px' }">
-          <div ref="window" class="absolute left-0 right-0 top-0 px-4" :class="{ 'transcript-highlight-api': highlightApi }" :style="{ transform: `translateY(${windowTop}px)`, fontSize: fontSizePx + 'px' }">
+          <div ref="window" class="absolute left-0 right-0 top-0" :class="{ 'transcript-highlight-api': highlightApi, 'transcript-book': bookLayout }" :style="{ transform: `translateY(${windowTop}px)`, fontSize: fontSizePx + 'px', fontFamily: currentFont.family, paddingLeft: sidePaddingPx + 'px', paddingRight: sidePaddingPx + 'px' }">
             <div v-for="row in visibleRows" :key="row.key" :data-row="row.index" class="transcript-row" :class="{ 'transcript-row-paragraph': row.paragraph }">
               <h3 v-if="row.type === 'chapter'" class="transcript-chapter" :data-chapter-start="row.start">{{ row.title }}</h3>
+              <p v-else-if="row.type === 'paragraph'" class="transcript-paragraph" :class="{ 'transcript-book-heading': row.heading, 'transcript-no-indent': row.afterHeading }">
+                <span v-for="part in row.segments" :key="part.segment" class="transcript-sentence" :class="{ 'transcript-search-current': part.segment === currentSearchSegment }" :data-seg="part.segment"
+                  ><template v-for="word in part.words"
+                    ><span :key="word.i" class="transcript-word" :class="{ 'transcript-search-hit': word.hit }" :data-wi="word.i">{{ word.w }}</span
+                    ><span v-if="word.note" :key="'n' + word.i" class="transcript-note-marker material-symbols" :data-annotation="word.note" :title="$strings.ButtonNote">sticky_note_2</span>{{ ' ' }}</template
+                  ></span
+                >
+              </p>
               <p v-else class="transcript-segment" :class="{ 'transcript-search-current': row.segment === currentSearchSegment, 'transcript-segment-heading': row.heading }" :data-seg="row.segment">
                 <template v-for="word in row.words"
                   ><span :key="word.i" class="transcript-word" :class="{ 'transcript-search-hit': word.hit }" :data-wi="word.i">{{ word.w }}</span
-                  >{{ ' ' }}</template
+                  ><span v-if="word.note" :key="'n' + word.i" class="transcript-note-marker material-symbols" :data-annotation="word.note" :title="$strings.ButtonNote">sticky_note_2</span>{{ ' ' }}</template
                 >
               </p>
             </div>
@@ -66,21 +94,34 @@
 
       <button v-if="!autoScroll && !loading && !error" class="absolute bottom-3 left-1/2 -translate-x-1/2 bg-primary border border-gray-600 hover:border-gray-400 shadow-lg rounded-full px-3 py-1 text-sm flex items-center whitespace-nowrap" @click="returnToCurrentPosition"><span class="material-symbols text-lg pr-1">my_location</span>{{ $strings.ButtonReturnToCurrentPosition }}</button>
     </div>
+
+    <player-read-along-popup v-if="popup" :library-item-id="libraryItem.id" :selection="popup.selection" :annotation="popup.annotation" :anchor="popup.anchor" :play-time="popup.playTime" @play="playFrom" @close="closePopup" />
+    <modals-annotations-modal v-model="showAnnotations" :library-item-id="libraryItem.id" :title="bookTitle" :author="bookAuthor" :chapters="chapters" @select="selectAnnotation" />
   </div>
 </template>
 
 <script>
 import { READ_ALONG_WORD_COUNTS, buildTranscriptIndex, findLastLessOrEqual, findPosition, getTranscriptAudioMismatch, highlightedWords, readAlongWordCount, searchTranscript } from '@/players/transcriptUtils'
+import { ANNOTATION_COLORS, annotationWordRanges, annotationsAtWord, wordsText } from '@/players/annotations'
+import { getAnnotationStore } from '@/players/annotationStore'
+import { loadTranscript as fetchTranscript } from '@/players/transcriptCache'
 
 const OVERSCAN_PX = 600
 const BASE_FONT_SIZE = 16
 const LINE_HEIGHT = 1.6
-const AVG_CHAR_WIDTH_EM = 0.48
 const ROW_PADDING_PX = 10
 const PAUSED_POLL_MS = 250
 const PLAYING_POLL_MS = 50
 /** CSS Custom Highlight of the words highlighted with the narrated one (styled in the unscoped style below) */
 const WORDS_HIGHLIGHT = 'abs-transcript-words'
+/** CSS Custom Highlights of the user's highlights, one per colour */
+const ANNOTATION_HIGHLIGHT_PREFIX = 'abs-transcript-annotation-'
+/** Fonts of the text; avgCharWidth (em) estimates the height of rows that are not rendered yet */
+const FONTS = [
+  { value: 'sans', family: null, avgCharWidth: 0.48 },
+  { value: 'serif', family: 'serif', avgCharWidth: 0.5 },
+  { value: 'lexend', family: "'Lexend', sans-serif", avgCharWidth: 0.56 }
+]
 
 export default {
   props: {
@@ -104,19 +145,24 @@ export default {
       loading: false,
       error: null,
       audioMismatch: false,
+      transcriptSource: null,
       renderVersion: 0,
+      annotationsVersion: 0,
       firstRow: 0,
       lastRow: -1,
       windowTop: 0,
       totalHeight: 0,
       autoScroll: true,
       showSearch: false,
+      showDisplayMenu: false,
+      showAnnotations: false,
       searchQuery: '',
       searchResults: [],
       searchPosition: -1,
       fontScale: 1,
       minFontScale: 0.75,
       maxFontScale: 2,
+      popup: null,
       // The highlighted words are one highlight, spaces included; without the API each word is highlighted
       highlightApi: !!(window.CSS?.highlights && window.Highlight)
     }
@@ -124,6 +170,7 @@ export default {
   watch: {
     'libraryItem.id'() {
       this.loadTranscript()
+      this.subscribeAnnotations()
     },
     'libraryItem.updatedAt'() {
       // Transcript may have been re-created while the panel is open
@@ -141,19 +188,94 @@ export default {
     },
     readAlongWords() {
       this.applyHighlight()
+    },
+    bookLayout() {
+      if (this.transcript) this.setTranscript(this.transcript)
+    },
+    currentFont(font) {
+      this.$nextTick(this.relayout)
+      // Row heights change again once the font file has loaded
+      if (font.family && document.fonts) {
+        document.fonts.load(`${this.fontSizePx}px ${font.family}`).then(() => {
+          if (this.currentFont === font && !this._isDestroyed) this.relayout()
+        })
+      }
     }
   },
   computed: {
     fontSizePx() {
       return Math.round(BASE_FONT_SIZE * this.fontScale)
     },
+    userSetting() {
+      return this.$store.getters['user/getUserSetting'] || (() => null)
+    },
+    /** Ebook transcripts are laid out like the book (paragraphs, headings) unless set to a sentence per line */
+    bookLayout() {
+      return this.transcriptSource === 'ebook' && this.userSetting('transcriptLayout') !== 'lines'
+    },
+    currentFont() {
+      const value = this.userSetting('transcriptFont') || (this.bookLayout ? 'serif' : 'sans')
+      return FONTS.find((font) => font.value === value) || FONTS[0]
+    },
+    sidePaddingPx() {
+      return this.bookLayout ? 24 : 16
+    },
+    fontValue: {
+      get() {
+        return this.currentFont.value
+      },
+      set(value) {
+        this.$store.dispatch('user/updateUserSettings', { transcriptFont: value })
+      }
+    },
+    fontItems() {
+      return [
+        { text: this.$strings.LabelFontSans, value: 'sans' },
+        { text: this.$strings.LabelFontSerif, value: 'serif' },
+        { text: 'Lexend', value: 'lexend' }
+      ]
+    },
+    layoutValue: {
+      get() {
+        return this.bookLayout ? 'book' : 'lines'
+      },
+      set(value) {
+        this.$store.dispatch('user/updateUserSettings', { transcriptLayout: value })
+      }
+    },
+    layoutItems() {
+      return [
+        { text: this.$strings.LabelTranscriptLayoutBook, value: 'book' },
+        { text: this.$strings.LabelTranscriptLayoutLines, value: 'lines' }
+      ]
+    },
     /** Words highlighted around the narrated word (user setting, shared with the ebook reader) */
     readAlongWords() {
-      return readAlongWordCount(this.$store.getters['user/getUserSetting']('readAlongWords'))
+      return readAlongWordCount(this.userSetting('readAlongWords'))
     },
-    readAlongWordsLabel() {
-      const words = this.readAlongWords === 1 ? this.$strings.LabelReadAlongHighlightOneWord : this.$getString('LabelReadAlongHighlightWords', [this.readAlongWords])
-      return `${this.$strings.LabelReadAlongHighlight}: ${words}`
+    readAlongWordsValue: {
+      get() {
+        return this.readAlongWords
+      },
+      set(count) {
+        this.$store.dispatch('user/updateUserSettings', { readAlongWords: count })
+      }
+    },
+    readAlongWordsItems() {
+      return READ_ALONG_WORD_COUNTS.map((count) => ({ text: String(count), value: count }))
+    },
+    /** The book's EPUB can be opened in the reader with the highlight (the transcript was made from it) */
+    canOpenBook() {
+      const media = this.libraryItem.media || {}
+      const format = media.ebookFormat || media.ebookFile?.ebookFormat
+      return this.transcriptSource === 'ebook' && String(format).toLowerCase() === 'epub'
+    },
+    bookTitle() {
+      return this.libraryItem.media?.metadata?.title || ''
+    },
+    bookAuthor() {
+      const metadata = this.libraryItem.media?.metadata || {}
+      return metadata.authorName || (metadata.authors || []).map((author) => author.name).join(', ')
     },
     normalizedQuery() {
       return this.searchQuery.trim().toLowerCase()
@@ -172,26 +294,35 @@ export default {
     visibleRows() {
       // eslint-disable-next-line no-unused-expressions
       this.renderVersion // index is not reactive; renderVersion changes when it is replaced
+      // eslint-disable-next-line no-unused-expressions
+      this.annotationsVersion // notes are marked after the last word of their highlight
       const index = this.index
       if (!index) return []
       const tokens = this.searchTokens
+      const noteEnds = this.noteEnds
+      const segmentWords = (si) => {
+        const segment = index.segments[si]
+        const firstWord = index.segmentFirstWord[si]
+        return segment.words.length
+          ? segment.words.map((word, j) => ({
+              i: firstWord + j,
+              w: word.w,
+              hit: tokens.length > 0 && tokens.some((token) => word.w.toLowerCase().includes(token)),
+              note: noteEnds.get(firstWord + j) || null
+            }))
+          : [{ i: -1, w: segment.text, hit: false, note: null }]
+      }
       const rows = []
       for (let r = this.firstRow; r <= this.lastRow && r < index.rows.length; r++) {
         const row = index.rows[r]
         if (row.type === 'chapter') {
           rows.push({ key: `r${r}`, index: r, type: 'chapter', title: row.chapter.title, start: row.chapter.start })
-          continue
+        } else if (row.type === 'paragraph') {
+          rows.push({ key: `r${r}`, index: r, type: 'paragraph', heading: row.heading, afterHeading: row.afterHeading, segments: row.segments.map((si) => ({ segment: si, words: segmentWords(si) })) })
+        } else {
+          const segment = index.segments[row.segment]
+          rows.push({ key: `r${r}`, index: r, type: 'segment', segment: row.segment, words: segmentWords(row.segment), heading: !!segment.heading, paragraph: !!segment.paragraph })
         }
-        const segment = index.segments[row.segment]
-        const firstWord = index.segmentFirstWord[row.segment]
-        const words = segment.words.length
-          ? segment.words.map((word, j) => ({
-              i: firstWord + j,
-              w: word.w,
-              hit: tokens.length > 0 && tokens.some((token) => word.w.toLowerCase().includes(token))
-            }))
-          : [{ i: -1, w: segment.text, hit: false }]
-        rows.push({ key: `r${r}`, index: r, type: 'segment', segment: row.segment, words, heading: !!segment.heading, paragraph: !!segment.paragraph })
       }
       return rows
     }
@@ -205,7 +336,7 @@ export default {
         this.clearTranscript()
       }
       try {
-        const transcript = await this.$axios.$get(`/api/items/${libraryItemId}/transcript`, { progress: false })
+        const transcript = await fetchTranscript(this.$axios, this.libraryItem)
         if (this.libraryItem?.id !== libraryItemId || this._isDestroyed) return
         this.loading = false
         this.error = null
@@ -219,6 +350,7 @@ export default {
     },
     clearTranscript() {
       this.transcript = null
+      this.transcriptSource = null
       this.index = null
       this.heights = null
       this.offsets = null
@@ -227,21 +359,27 @@ export default {
       this.activeWordEl = null
       this.activeSegmentEl = null
       this.groupEls = []
+      this.annotationEls = []
       this.audioMismatch = false
       this.searchResults = []
       this.searchPosition = -1
+      this.popup = null
+      this.updateAnnotationRanges()
       this.renderVersion++
     },
     async setTranscript(transcript) {
       this.transcript = transcript
+      this.transcriptSource = transcript.source || null
       this.heights = null
       this.offsets = null
       // Ebook transcripts carry the book's own headings, so the item's chapter markers would be duplicates
-      this.index = buildTranscriptIndex(transcript, transcript.source === 'ebook' ? [] : this.chapters)
+      this.index = buildTranscriptIndex(transcript, transcript.source === 'ebook' ? [] : this.chapters, { paragraphs: this.bookLayout })
       this.audioMismatch = !!getTranscriptAudioMismatch(transcript, this.libraryItem.media?.tracks)
       this.activeWord = -1
       this.activeSegment = -1
       this.lastTime = null
+      this.popup = null
+      this.updateAnnotationRanges()
       this.renderVersion++
       await this.$nextTick() // scroller is visible now
       this.resetLayout()
@@ -255,7 +393,7 @@ export default {
       const scroller = this.$refs.scroller
       if (!index || !scroller) return
       const count = index.rows.length
-      this.contentWidth = Math.max(100, scroller.clientWidth - 32)
+      this.contentWidth = Math.max(100, scroller.clientWidth - this.sidePaddingPx * 2)
       this.heights = new Float64Array(count)
       this.offsets = new Float64Array(count + 1)
       for (let r = 0; r < count; r++) this.heights[r] = this.estimateRowHeight(r)
@@ -266,9 +404,15 @@ export default {
       const row = this.index.rows[r]
       const lineHeight = this.fontSizePx * LINE_HEIGHT
       if (row.type === 'chapter') return lineHeight * 1.25 + 28
-      const segment = this.index.segments[row.segment]
-      const chars = segment.text ? segment.text.length : segment.words.reduce((total, word) => total + word.w.length + 1, 0)
-      const lines = Math.max(1, Math.ceil((chars * this.fontSizePx * AVG_CHAR_WIDTH_EM) / this.contentWidth))
+      const segments = row.type === 'paragraph' ? row.segments : [row.segment]
+      let chars = 0
+      for (const si of segments) {
+        const segment = this.index.segments[si]
+        chars += (segment.text ? segment.text.length : segment.words.reduce((total, word) => total + word.w.length + 1, 0)) + 1
+      }
+      const scale = row.heading ? 1.2 : 1
+      const lines = Math.max(1, Math.ceil((chars * this.fontSizePx * scale * this.currentFont.avgCharWidth) / this.contentWidth))
+      if (row.type === 'paragraph') return lines * lineHeight * scale + (row.heading ? this.fontSizePx * 2.1 : 2)
       return lines * lineHeight + ROW_PADDING_PX
     },
     recomputeOffsets(fromRow) {
@@ -340,7 +484,7 @@ export default {
     onResize() {
       const scroller = this.$refs.scroller
       if (!scroller || !this.index || !this.heights) return
-      const width = Math.max(100, scroller.clientWidth - 32)
+      const width = Math.max(100, scroller.clientWidth - this.sidePaddingPx * 2)
       if (Math.abs(width - this.contentWidth) > 1) {
         this.relayout()
       } else {
@@ -349,7 +493,7 @@ export default {
       }
     },
     relayout() {
-      // Font size or width changed: re-estimate everything, then keep the current position in view
+      // Font, size or width changed: re-estimate everything, then keep the current position in view
       const scroller = this.$refs.scroller
       const anchorRow = scroller ? this.rowAtY(scroller.scrollTop) : 0
       this.resetLayout()
@@ -358,6 +502,19 @@ export default {
       } else if (this.offsets) {
         this.setScrollTop(this.offsets[anchorRow])
       }
+    },
+    /** Scroll a segment into view: to its row first, then to the segment itself once rendered (a paragraph can be long) */
+    scrollToSegment(segmentIndex) {
+      const scroller = this.$refs.scroller
+      if (!scroller || !this.offsets || segmentIndex < 0) return
+      const row = this.index.segmentRow[segmentIndex]
+      this.setScrollTop(this.offsets[row] - scroller.clientHeight * 0.3)
+      this.$nextTick(() => {
+        const el = this.$refs.window?.querySelector(`[data-seg="${segmentIndex}"]`)
+        if (!el) return
+        const top = el.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop
+        this.setScrollTop(top - scroller.clientHeight * 0.3)
+      })
     },
 
     // ---------------------------------------------------------------- sync with playback
@@ -424,16 +581,14 @@ export default {
         const range = document.createRange()
         range.setStartBefore(elements[0])
         range.setEndAfter(elements[elements.length - 1])
-        CSS.highlights.set(WORDS_HIGHLIGHT, new Highlight(range))
+        const highlight = new Highlight(range)
+        highlight.priority = 1 // over the user's highlights
+        CSS.highlights.set(WORDS_HIGHLIGHT, highlight)
         return
       }
       for (const el of this.groupEls) if (!elements.includes(el)) el.classList.remove('transcript-word-group')
       for (const el of elements) el.classList.add('transcript-word-group')
       this.groupEls = elements
-    },
-    nextReadAlongWords() {
-      const next = READ_ALONG_WORD_COUNTS[(READ_ALONG_WORD_COUNTS.indexOf(this.readAlongWords) + 1) % READ_ALONG_WORD_COUNTS.length]
-      this.$store.dispatch('user/updateUserSettings', { readAlongWords: next })
     },
     /** Keep the current word (or its segment while not rendered yet) in view */
     followCurrent(force = false) {
@@ -477,6 +632,13 @@ export default {
       if (['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End'].includes(event.key)) this.stopAutoScroll()
     },
     onClick(event) {
+      // Selecting text: the selection gets the highlight menu instead (onMouseUp)
+      if (this.hasTextSelection()) return
+      const noteEl = event.target.closest('[data-annotation]')
+      if (noteEl) {
+        this.openAnnotation(noteEl.dataset.annotation, noteEl)
+        return
+      }
       const wordEl = event.target.closest('[data-wi]')
       if (wordEl) {
         const wordIndex = Number(wordEl.dataset.wi)
@@ -490,6 +652,155 @@ export default {
       this.autoScroll = true
       this.$emit('seek', time)
       this.$nextTick(() => this.tick(true))
+    },
+    playFrom(time) {
+      this.closePopup()
+      this.seek(time)
+      if (!this.playing) this.$emit('play')
+    },
+
+    // ---------------------------------------------------------------- highlights and notes
+    subscribeAnnotations() {
+      this.releaseAnnotations?.()
+      const libraryItemId = this.libraryItem.id
+      const store = getAnnotationStore(this.$axios)
+      this.annotations = store.get(libraryItemId)
+      this.updateAnnotationRanges()
+      this.releaseAnnotations = store.subscribe(libraryItemId, (annotations) => {
+        this.annotations = annotations
+        this.updateAnnotationRanges()
+      })
+      store.load(libraryItemId)
+    },
+    updateAnnotationRanges() {
+      this.annotationRanges = this.index ? annotationWordRanges(this.index, this.annotations || []) : []
+      this.noteEnds = new Map(this.annotationRanges.filter((range) => range.annotation.note).map((range) => [range.last, range.annotation.id]))
+      this.annotationsVersion++
+      this.$nextTick(this.applyAnnotations)
+    },
+    /** Draw the user's highlights on the rendered words */
+    applyAnnotations() {
+      const container = this.$refs.window
+      if (!container) return
+      const wordEls = container.querySelectorAll('[data-wi]')
+      let renderedFirst = Infinity
+      let renderedLast = -1
+      for (const el of [wordEls[0], wordEls[wordEls.length - 1]]) {
+        const i = el ? Number(el.dataset.wi) : -1
+        if (i >= 0) {
+          renderedFirst = Math.min(renderedFirst, i)
+          renderedLast = Math.max(renderedLast, i)
+        }
+      }
+      const byColor = new Map(ANNOTATION_COLORS.map((color) => [color, []]))
+      const elements = []
+      for (const { color, first, last } of this.annotationRanges || []) {
+        const from = Math.max(first, renderedFirst)
+        const to = Math.min(last, renderedLast)
+        if (from > to) continue
+        const startEl = container.querySelector(`[data-wi="${from}"]`)
+        const endEl = container.querySelector(`[data-wi="${to}"]`)
+        if (!startEl || !endEl) continue
+        if (this.highlightApi) {
+          const range = document.createRange()
+          range.setStartBefore(startEl)
+          range.setEndAfter(endEl)
+          byColor.get(color).push(range)
+        } else {
+          for (let i = from; i <= to; i++) {
+            const el = container.querySelector(`[data-wi="${i}"]`)
+            if (el) elements.push([el, color])
+          }
+        }
+      }
+      if (this.highlightApi) {
+        for (const [color, ranges] of byColor) {
+          if (ranges.length) CSS.highlights.set(ANNOTATION_HIGHLIGHT_PREFIX + color, new Highlight(...ranges))
+          else CSS.highlights.delete(ANNOTATION_HIGHLIGHT_PREFIX + color)
+        }
+        return
+      }
+      for (const el of this.annotationEls) ANNOTATION_COLORS.forEach((color) => el.classList.remove(`transcript-annotation-${color}`))
+      for (const [el, color] of elements) el.classList.add(`transcript-annotation-${color}`)
+      this.annotationEls = elements.map(([el]) => el)
+    },
+    hasTextSelection() {
+      const selection = window.getSelection()
+      return !!selection && !selection.isCollapsed && !!this.$refs.scroller?.contains(selection.anchorNode)
+    },
+    /** Transcript words in the text selection: { first, last } or null */
+    selectedWords() {
+      if (!this.hasTextSelection()) return null
+      const selection = window.getSelection()
+      let first = -1
+      let last = -1
+      for (const el of this.$refs.window.querySelectorAll('[data-wi]')) {
+        if (!selection.containsNode(el, true)) continue
+        const i = Number(el.dataset.wi)
+        if (i < 0) continue
+        if (first < 0) first = i
+        last = i
+      }
+      return first >= 0 ? { first, last } : null
+    },
+    onMouseUp(event) {
+      if (event.button !== 0) return
+      // After the browser updated the selection
+      setTimeout(() => {
+        const words = this.selectedWords()
+        if (!words) return
+        const rect = window.getSelection().getRangeAt(0).getBoundingClientRect()
+        this.openPopup(words.first, words.last, rect)
+      })
+    },
+    /** Right-click (or long-press on touch screens) a word: its definition and the highlight menu */
+    onContextMenu(event) {
+      const wordEl = event.target.closest('[data-wi]')
+      const wordIndex = wordEl ? Number(wordEl.dataset.wi) : -1
+      if (!this.index || wordIndex < 0) return
+      event.preventDefault()
+      const words = this.selectedWords()
+      if (words && wordIndex >= words.first && wordIndex <= words.last) {
+        this.openPopup(words.first, words.last, window.getSelection().getRangeAt(0).getBoundingClientRect())
+        return
+      }
+      const existing = annotationsAtWord(this.index, this.annotations || [], wordIndex)[0]
+      if (existing) {
+        const range = this.annotationRanges.find((r) => r.annotation.id === existing.id)
+        this.openPopup(range.first, range.last, wordEl.getBoundingClientRect(), existing)
+        return
+      }
+      this.openPopup(wordIndex, wordIndex, wordEl.getBoundingClientRect())
+    },
+    openAnnotation(annotationId, el) {
+      const range = (this.annotationRanges || []).find((r) => r.annotation.id === annotationId)
+      if (range) this.openPopup(range.first, range.last, el.getBoundingClientRect(), range.annotation)
+    },
+    openPopup(first, last, rect, annotation = null) {
+      const index = this.index
+      this.popup = {
+        selection: { first, last, text: wordsText(index, first, last), start: index.wordStarts[first], end: index.wordStarts[last] },
+        annotation,
+        anchor: { left: rect.left, top: rect.top, width: rect.width, height: rect.height },
+        playTime: index.wordStarts[first]
+      }
+    },
+    closePopup() {
+      this.popup = null
+      if (this.hasTextSelection()) window.getSelection().removeAllRanges()
+    },
+    selectAnnotation(annotation) {
+      this.showAnnotations = false
+      this.seek(annotation.start)
+    },
+    async openBook() {
+      try {
+        const libraryItem = await this.$axios.$get(`/api/items/${this.libraryItem.id}?expanded=1`)
+        this.$store.commit('showEReader', { libraryItem, keepProgress: true })
+      } catch (error) {
+        console.error('[TranscriptPanel] Failed to open the book', error)
+        this.$toast.error(this.$strings.ToastFailedToLoadData)
+      }
     },
 
     // ---------------------------------------------------------------- search
@@ -519,10 +830,8 @@ export default {
       if (!this.searchResults.length) return
       const count = this.searchResults.length
       this.searchPosition = absolutePosition !== null ? absolutePosition : (this.searchPosition + direction + count) % count
-      const row = this.index.segmentRow[this.searchResults[this.searchPosition]]
       this.autoScroll = false
-      const scroller = this.$refs.scroller
-      if (scroller) this.setScrollTop(this.offsets[row] - scroller.clientHeight * 0.3)
+      this.scrollToSegment(this.searchResults[this.searchPosition])
     },
 
     changeFontScale(delta) {
@@ -544,13 +853,18 @@ export default {
     this.activeWordEl = null
     this.activeSegmentEl = null
     this.groupEls = []
+    this.annotations = []
+    this.annotationRanges = []
+    this.annotationEls = []
+    this.noteEnds = new Map()
     this.lastTime = null
     this.contentWidth = 400
   },
   updated() {
-    // Rows were (re-)rendered: measure them and restore the highlight on the new elements
+    // Rows were (re-)rendered: measure them and restore the highlights on the new elements
     this.measureRenderedRows()
     this.applyHighlight()
+    this.applyAnnotations()
     this.followCurrent()
   },
   mounted() {
@@ -559,11 +873,16 @@ export default {
       this.resizeObserver = new ResizeObserver(() => this.onResize())
       this.resizeObserver.observe(this.$refs.scroller)
     }
+    this.subscribeAnnotations()
     this.loadTranscript()
     this.startSyncLoop()
   },
   beforeDestroy() {
-    if (this.highlightApi) CSS.highlights.delete(WORDS_HIGHLIGHT)
+    if (this.highlightApi) {
+      CSS.highlights.delete(WORDS_HIGHLIGHT)
+      ANNOTATION_COLORS.forEach((color) => CSS.highlights.delete(ANNOTATION_HIGHLIGHT_PREFIX + color))
+    }
+    this.releaseAnnotations?.()
     this.stopSyncLoop()
     clearTimeout(this.searchTimeout)
     if (this.scrollFrame) cancelAnimationFrame(this.scrollFrame)
@@ -585,6 +904,10 @@ export default {
 }
 .transcript-icon-btn:disabled {
   opacity: 0.4;
+}
+.transcript-toggle ::v-deep .toggle-btn {
+  padding: 0.15rem 0.7rem;
+  font-size: 0.8rem;
 }
 .transcript-scroller {
   overflow-anchor: none;
@@ -624,6 +947,35 @@ export default {
   font-weight: 600;
   color: rgb(229 231 235);
 }
+/* Book layout: the book's paragraphs, indented and justified like a printed page */
+.transcript-book .transcript-row {
+  padding: 0;
+}
+.transcript-paragraph {
+  line-height: 1.6;
+  margin: 0;
+  padding-bottom: 2px;
+  text-indent: 1.5em;
+  text-align: justify;
+  hyphens: auto;
+  overflow-wrap: anywhere;
+  color: rgb(209 213 219);
+}
+.transcript-paragraph.transcript-no-indent {
+  text-indent: 0;
+}
+.transcript-paragraph.transcript-book-heading {
+  font-size: 1.2em;
+  font-weight: 600;
+  line-height: 1.4;
+  text-indent: 0;
+  text-align: center;
+  color: white;
+  padding: 1.2em 0 0.55em;
+}
+.transcript-sentence.transcript-segment-active {
+  color: white;
+}
 .transcript-word {
   cursor: pointer;
   border-radius: 3px;
@@ -642,6 +994,26 @@ export default {
   background-color: transparent;
   box-shadow: none;
 }
+.transcript-annotation-yellow {
+  background-color: rgb(250 204 21 / 0.38);
+}
+.transcript-annotation-blue {
+  background-color: rgb(56 189 248 / 0.38);
+}
+.transcript-annotation-pink {
+  background-color: rgb(244 114 182 / 0.4);
+}
+.transcript-annotation-orange {
+  background-color: rgb(251 146 60 / 0.42);
+}
+.transcript-note-marker {
+  font-size: 0.85em;
+  vertical-align: super;
+  color: rgb(250 204 21);
+  cursor: pointer;
+  text-indent: 0;
+  padding-left: 1px;
+}
 .transcript-search-hit {
   background-color: rgb(33 150 243 / 0.35);
 }
@@ -654,5 +1026,17 @@ export default {
 ::highlight(abs-transcript-words) {
   background-color: rgb(250 204 21 / 0.3);
   color: white;
+}
+::highlight(abs-transcript-annotation-yellow) {
+  background-color: rgb(250 204 21 / 0.38);
+}
+::highlight(abs-transcript-annotation-blue) {
+  background-color: rgb(56 189 248 / 0.38);
+}
+::highlight(abs-transcript-annotation-pink) {
+  background-color: rgb(244 114 182 / 0.4);
+}
+::highlight(abs-transcript-annotation-orange) {
+  background-color: rgb(251 146 60 / 0.42);
 }
 </style>

@@ -1,6 +1,8 @@
 import Vue from 'vue'
 import JSZip from 'jszip'
 import EpubReader from '@/components/readers/EpubReader.vue'
+import ReadAlongPopup from '@/components/player/ReadAlongPopup.vue'
+import LoadingSpinner from '@/components/widgets/LoadingSpinner.vue'
 import Strings from '@/strings/en-us.json'
 import { SENTENCE_HIGHLIGHT, WORD_HIGHLIGHT, tokenizeDocument } from '@/players/ReadAlong'
 import { allPlaybackRates } from '../../../support/playbackRates'
@@ -114,7 +116,7 @@ describe('<EpubReader /> read along', () => {
     cy.wrap(null).then(() => buildEpub(allChapters).then((buffer) => (epub = buffer)))
   })
 
-  function mount({ streaming = true, settings = Vue.observable({ readAlongWords: null }) } = {}) {
+  function mount({ streaming = true, playing = streaming, keepProgress = false, progress = null, annotations = [], settings = Vue.observable({ readAlongWords: null }) } = {}) {
     const clock = { time: words[0].start + 0.05 } // narration has started: first word
     const eventBus = new Vue()
     const events = { seeks: [], plays: [] }
@@ -124,23 +126,55 @@ describe('<EpubReader /> read along', () => {
       clock.time = time
     })
     eventBus.$on('play-item', (payload) => events.plays.push(payload))
-    const state = Vue.observable({ streamLibraryItem: streaming ? { id: 'book' } : null, streamIsPlaying: streaming })
+    const state = Vue.observable({ streamLibraryItem: streaming ? { id: 'book' } : null, streamIsPlaying: playing })
+    const saved = [...annotations]
+    const patches = []
     const mocks = {
       $axios: {
         $get: (url) => Promise.resolve(url.endsWith('/transcript') ? transcript : epub.slice(0)),
-        $patch: () => Promise.resolve()
+        $patch: (url, payload) => {
+          patches.push(payload)
+          return Promise.resolve()
+        },
+        $request: ({ method, data }) => {
+          if (method === 'GET') return Promise.resolve({ annotations: [...saved] })
+          if (method === 'PUT') saved.push(data)
+          return Promise.resolve({ annotation: data })
+        }
       },
-      $store: { state, getters: { 'libraries/getLibraryEpubsAllowScriptedContent': false, 'user/getUserMediaProgress': () => null, 'user/getUserSetting': (key) => settings[key] ?? null } },
+      $store: { state, getters: { 'libraries/getLibraryEpubsAllowScriptedContent': false, 'user/getUserMediaProgress': () => progress, 'user/getUserSetting': (key) => settings[key] ?? null, 'user/getUserBookmarksForItem': () => [] } },
       $eventBus: eventBus,
-      $strings: Strings
+      $strings: Strings,
+      $getString: (key) => Strings[key],
+      $config: { routerBasePath: '/audiobookshelf' },
+      $toast: { success: () => {}, error: () => {}, info: () => {} }
     }
+    const stubs = { 'player-read-along-popup': ReadAlongPopup, 'widgets-loading-spinner': LoadingSpinner }
     cy.viewport(1100, 750)
-    return cy.mount(EpubReader, { propsData: { libraryItem: { id: 'book', hasTranscript: true, media: {} }, keepProgress: false }, mocks }).then(({ wrapper }) => {
+    const libraryItem = { id: 'book', hasTranscript: true, updatedAt: 1, media: { duration: words[words.length - 1].end + 5 } }
+    return cy.mount(EpubReader, { propsData: { libraryItem, keepProgress }, mocks, stubs }).then(({ wrapper }) => {
       cy.wrap(wrapper.vm, { timeout: 20000 }).its('readAlongAvailable').should('be.true')
       // The first page is displayed (page turns and locations need epub.js' view manager)
       cy.wrap(wrapper.vm, { timeout: 20000 }).should((vm) => expect(vm.rendition.manager && vm.rendition.currentLocation()?.start).to.exist)
-      return cy.wrap({ vm: wrapper.vm, clock, events, state })
+      return cy.wrap({ vm: wrapper.vm, clock, events, state, patches, saved })
     })
+  }
+
+  /** Dispatch a mouse event at the middle of a word in its section's document */
+  function mouseAtWord(vm, wordIndex, type, init = {}) {
+    const { entry, range } = vm.readAlong.wordRange(wordIndex)
+    const rect = range.getBoundingClientRect()
+    const element = range.startContainer.parentElement
+    element.dispatchEvent(new entry.doc.defaultView.MouseEvent(type, { bubbles: true, cancelable: true, clientX: rect.left + rect.width / 2, clientY: rect.top + rect.height / 2, ...init }))
+  }
+
+  function highlightedRanges(name) {
+    const texts = []
+    for (const iframe of document.querySelectorAll('#viewer iframe')) {
+      const highlight = iframe.contentWindow.CSS?.highlights?.get(name)
+      if (highlight) for (const range of highlight) texts.push(range.toString().replace(/\s+/g, ' '))
+    }
+    return texts
   }
 
   function isVisible(vm, wordIndex) {
@@ -337,6 +371,95 @@ describe('<EpubReader /> read along', () => {
       })
       // Following the narration again
       cy.contains('button', Strings.ButtonReturnToNarration).should('not.exist')
+    })
+  })
+  it('draws highlights saved before and opens one when a highlighted word is right-clicked', () => {
+    const annotation = { id: 'annotation-1', start: words[10].start, end: words[12].start, text: wordsText(10, 12), color: 'blue', note: 'Spring', createdAt: 1, updatedAt: 1 }
+    mount({ annotations: [annotation] }).then(({ vm }) => {
+      cy.wrap(null, { timeout: 10000 }).should(() => expect(highlightedRanges('abs-readalong-annotation-blue')).to.deep.equal([wordsText(10, 12)]))
+      cy.then(() => mouseAtWord(vm, 11, 'contextmenu'))
+      cy.get('.readalong-popup').should('contain.text', 'Spring').find(`button[aria-label="${Strings.ButtonDeleteHighlight}"]`).should('exist')
+    })
+  })
+
+  it('highlights words selected in the book', () => {
+    mount().then(({ vm, saved }) => {
+      cy.wrap(null, { timeout: 10000 }).should(() => expect(highlighted(WORD_HIGHLIGHT)).to.equal(group(0)))
+      cy.then(() => {
+        const first = vm.readAlong.wordRange(20)
+        const last = vm.readAlong.wordRange(23)
+        first.entry.doc.getSelection().setBaseAndExtent(first.range.startContainer, first.range.startOffset, last.range.endContainer, last.range.endOffset)
+        mouseAtWord(vm, 23, 'mouseup', { button: 0 })
+      })
+      cy.get('.readalong-popup').should('contain.text', wordsText(20, 23))
+      cy.get(`.readalong-popup button[aria-label="${Strings.ButtonHighlight}: ${Strings.LabelColorYellow}"]`).click()
+      cy.then(() => expect(saved[0]).to.include({ start: words[20].start, end: words[23].start, text: wordsText(20, 23), color: 'yellow' }))
+      cy.wrap(null).should(() => expect(highlightedRanges('abs-readalong-annotation-yellow')).to.deep.equal([wordsText(20, 23)]))
+    })
+  })
+
+  it('moves the listening position along when reading on with the audio paused', () => {
+    mount({ playing: false, keepProgress: true }).then(({ vm, events, patches }) => {
+      cy.wrap(null, { timeout: 10000 }).should(() => expect(highlighted(WORD_HIGHLIGHT)).to.equal(group(0)))
+      cy.then(() => vm.next())
+      cy.wrap(null, { timeout: 10000 }).should(() => expect(patches.filter((p) => p.currentTime !== undefined)).to.have.length(1))
+      cy.then(() => {
+        const { currentTime, ebookLocation, duration } = patches.find((p) => p.currentTime !== undefined)
+        const index = words.findIndex((w) => w.start === currentTime)
+        expect(index, 'the first word of the page').to.be.greaterThan(0)
+        expect(isVisible(vm, index)).to.be.true
+        expect(isVisible(vm, index - 1)).to.be.false
+        expect(ebookLocation).to.match(/^epubcfi/)
+        expect(duration).to.be.greaterThan(currentTime)
+        // The paused player continues from the page
+        expect(events.seeks).to.deep.equal([currentTime])
+      })
+    })
+  })
+
+  it('does not move the listening position while the audio plays', () => {
+    mount({ playing: true, keepProgress: true }).then(({ vm, patches }) => {
+      cy.wrap(null, { timeout: 10000 }).should(() => expect(highlighted(WORD_HIGHLIGHT)).to.equal(group(0)))
+      cy.then(() => vm.next())
+      cy.wait(800)
+      cy.then(() => expect(patches.length, 'the page is saved').to.be.greaterThan(0))
+      cy.then(() => expect(patches.filter((p) => p.currentTime !== undefined)).to.have.length(0))
+    })
+  })
+
+  it('opens where the user stopped listening and can go back to where they were reading', () => {
+    const listened = 400
+    mount({ streaming: false, keepProgress: true, progress: { currentTime: words[listened].start + 0.1, ebookLocation: null } }).then(({ vm, patches }) => {
+      cy.contains(Strings.MessageOpenedWhereYouStoppedListening, { timeout: 10000 }).should('be.visible')
+      cy.wrap(null, { timeout: 10000 }).should(() => expect(isVisible(vm, listened)).to.be.true)
+      cy.wrap(null).should(() => expect(highlighted(WORD_HIGHLIGHT)).to.contain(words[listened].w))
+      // Turning to that position is not reading on: the listening position stays exactly where it was
+      cy.wait(500)
+      cy.then(() => expect(patches.filter((p) => p.currentTime !== undefined)).to.have.length(0))
+      cy.contains('button', Strings.ButtonBackToReadingPosition).click()
+      cy.wrap(null, { timeout: 10000 }).should(() => expect(isVisible(vm, 0)).to.be.true)
+      cy.contains(Strings.MessageOpenedWhereYouStoppedListening).should('not.exist')
+    })
+  })
+
+  it('stays on the saved page when the listening position is on it', () => {
+    mount({ streaming: false, keepProgress: true, progress: { currentTime: words[2].start, ebookLocation: null } }).then(({ vm }) => {
+      cy.wait(1000)
+      cy.contains(Strings.MessageOpenedWhereYouStoppedListening).should('not.exist')
+      cy.then(() => expect(isVisible(vm, 0)).to.be.true)
+    })
+  })
+
+  it('turns to a highlight chosen in the list without changing the narration', () => {
+    mount({ playing: true }).then(({ vm, clock, events }) => {
+      cy.wrap(null, { timeout: 10000 }).should(() => expect(highlighted(WORD_HIGHLIGHT)).to.equal(group(0)))
+      cy.then(() => vm.goToAnnotation({ start: words[900].start, end: words[902].start }))
+      cy.wrap(null, { timeout: 10000 }).should(() => expect(isVisible(vm, 900)).to.be.true)
+      cy.then(() => {
+        expect(events.seeks).to.have.length(0)
+        expect(clock.time).to.be.lessThan(words[1].start)
+      })
+      cy.contains('button', Strings.ButtonReturnToNarration).should('be.visible')
     })
   })
 })

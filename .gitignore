@@ -26,3 +26,4 @@ sw.*
 tailwind.compiled.css
 tailwind.config.js
 /client/static/transcriber/vendor/
+/client/static/dictionary/

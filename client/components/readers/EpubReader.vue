@@ -1,10 +1,16 @@
 <template>
   <div id="epub-reader" class="h-full w-full relative">
-    <!-- Read along with the audiobook (ebook transcript): play from this page (also when reading ahead of the audio), or go back to the narrated page -->
-    <div v-if="readAlongAvailable && (!isStreamingThisItem || !readAlongFollowing)" class="absolute bottom-2 left-1/2 -translate-x-1/2 z-10 flex items-center gap-2">
-      <button type="button" class="readalong-btn" @click="playFromHere"><span class="material-symbols fill text-xl pr-1">play_arrow</span>{{ $strings.ButtonPlayFromHere }}</button>
+    <!-- Read along with the audiobook (ebook transcript): play from this page (also when reading ahead of the audio), or go back to the narrated page.
+         Opened where the user stopped listening: offer to go back to where they were reading. -->
+    <div v-if="readAlongAvailable && listeningJump" class="absolute bottom-2 left-1/2 -translate-x-1/2 z-10 flex items-center gap-2">
+      <p class="readalong-btn pointer-events-none"><span class="material-symbols text-xl pr-1">headphones</span>{{ $strings.MessageOpenedWhereYouStoppedListening }}</p>
+      <button type="button" class="readalong-btn" @click="backToReadingPosition"><span class="material-symbols text-xl pr-1">undo</span>{{ $strings.ButtonBackToReadingPosition }}</button>
+    </div>
+    <div v-else-if="readAlongAvailable && (!isStreamingThisItem || !readAlongFollowing)" class="absolute bottom-2 left-1/2 -translate-x-1/2 z-10 flex items-center gap-2">
+      <button type="button" class="readalong-btn" @click="playFromHere()"><span class="material-symbols fill text-xl pr-1">play_arrow</span>{{ $strings.ButtonPlayFromHere }}</button>
       <button v-if="isStreamingThisItem" type="button" class="readalong-btn" @click="returnToNarration"><span class="material-symbols text-xl pr-1">my_location</span>{{ $strings.ButtonReturnToNarration }}</button>
     </div>
+    <player-read-along-popup v-if="popup" :library-item-id="libraryItemId" :selection="popup.selection" :annotation="popup.annotation" :anchor="popup.anchor" :play-time="popup.playTime" @play="playFromHere" @close="closePopup" />
     <div class="h-full flex items-center justify-center">
       <button type="button" aria-label="Previous page" class="w-24 max-w-24 h-full hidden sm:flex items-center overflow-x-hidden justify-center opacity-50 hover:opacity-100">
         <span v-if="hasPrev" class="material-symbols text-6xl" @mousedown.prevent @click="prev">chevron_left</span>
@@ -23,9 +29,16 @@
 import ePub from 'epubjs'
 import ReadAlong from '@/players/ReadAlong'
 import { readAlongWordCount } from '@/players/transcriptUtils'
+import { wordsText } from '@/players/annotations'
+import { getAnnotationStore } from '@/players/annotationStore'
+import { loadTranscript as fetchTranscript } from '@/players/transcriptCache'
 
 const READ_ALONG_PLAYING_POLL_MS = 50
 const READ_ALONG_PAUSED_POLL_MS = 250
+/** Page turns made by the reader itself (opening at the listening position, going to a highlight) are not the user reading */
+const OWN_NAVIGATION_MS = 2000
+/** How long "opened where you stopped listening" offers to go back */
+const LISTENING_JUMP_NOTICE_MS = 12000
 
 /**
  * @typedef {object} EpubReader
@@ -53,6 +66,8 @@ export default {
       chapters: [],
       readAlongAvailable: false,
       readAlongFollowing: true,
+      popup: null,
+      listeningJump: null,
       ereaderSettings: {
         theme: 'dark',
         font: 'serif',
@@ -70,11 +85,21 @@ export default {
     isStreamingThisItem() {
       this.startReadAlongLoop()
     },
-    isPlaying() {
+    isPlaying(playing) {
       this.startReadAlongLoop()
+      // Play pressed after reading on with the audio paused: it continues from the page, so follow it again
+      if (playing && this.isStreamingThisItem && this.readAlong && !this.readAlong.following) {
+        let state = null
+        this.$eventBus.$emit('player-get-time', (value) => (state = value))
+        const page = this.readAlong.pageTimeRange()
+        if (page && state && state.time >= page.start - 1 && state.time <= page.end + 1) this.readAlong.resumeFollowing()
+      }
     },
     readAlongWords(count) {
       this.readAlong?.setHighlightWords(count)
+    },
+    readAlongAvailable(available) {
+      this.$emit('read-along', available)
     }
   },
   computed: {
@@ -92,6 +117,11 @@ export default {
     readAlongWords() {
       const getUserSetting = this.$store.getters['user/getUserSetting']
       return readAlongWordCount(getUserSetting ? getUserSetting('readAlongWords') : null)
+    },
+    /** Reading (audio not playing) moves the listening position along; opening goes to where the user stopped listening */
+    syncReadingListening() {
+      const getUserSetting = this.$store.getters['user/getUserSetting']
+      return !getUserSetting || getUserSetting('syncReadingListening') !== false
     },
     allowScriptedContent() {
       return this.$store.getters['libraries/getLibraryEpubsAllowScriptedContent']
@@ -197,7 +227,7 @@ export default {
       if (!this.libraryItem?.hasTranscript || this.fileId) return
       let transcript
       try {
-        transcript = await this.$axios.$get(`/api/items/${this.libraryItemId}/transcript`, { progress: false })
+        transcript = await fetchTranscript(this.$axios, this.libraryItem)
       } catch (error) {
         console.error('EpubReader.loadReadAlong failed', error)
         return
@@ -210,16 +240,96 @@ export default {
         onSeek: (time) => this.$eventBus.$emit('playback-seek', time),
         onFollowChanged: (following) => {
           this.readAlongFollowing = following
-        }
+        },
+        onSelect: (selection) => this.openPopup(selection)
       })
       const views = this.rendition.views()?.all?.() || []
       views.forEach((view) => this.readAlong.onRendered(view.section, view))
       this.readAlongAvailable = true
+      this.subscribeAnnotations()
       this.startReadAlongLoop()
+      this.openAtListeningPosition()
+    },
+    subscribeAnnotations() {
+      const store = getAnnotationStore(this.$axios)
+      this.releaseAnnotations?.()
+      this.readAlong.setAnnotations(store.get(this.libraryItemId))
+      this.releaseAnnotations = store.subscribe(this.libraryItemId, (annotations) => this.readAlong?.setAnnotations(annotations))
+      store.load(this.libraryItemId)
+    },
+    /**
+     * Opened without the audiobook in the player: if the user listened on since they last read (the listening position is not
+     * on the saved page), show where they stopped listening instead, and offer to go back
+     */
+    async openAtListeningPosition() {
+      if (!this.syncReadingListening || !this.keepProgress || this.isStreamingThisItem) return
+      const progress = this.userMediaProgress
+      const listeningTime = progress?.currentTime
+      if (!listeningTime || progress.isFinished) return
+      await this.initialDisplay?.catch(() => {})
+      if (!this.readAlong || this._isDestroyed || this.isStreamingThisItem) return
+      const page = this.readAlong.pageTimeRange()
+      if (page && listeningTime >= page.start - 1 && listeningTime <= page.end + 1) return
+      let cfi = null
+      try {
+        cfi = this.rendition.currentLocation()?.start?.cfi || null
+      } catch (error) {
+        cfi = null
+      }
+      this.listeningJump = { cfi }
+      this.ownNavigationUntil = Date.now() + OWN_NAVIGATION_MS
+      this.staticTime = listeningTime
+      this.readAlong.showTime(listeningTime)
+      this.startReadAlongLoop()
+      clearTimeout(this.listeningJumpTimeout)
+      this.listeningJumpTimeout = setTimeout(() => (this.listeningJump = null), LISTENING_JUMP_NOTICE_MS)
+    },
+    backToReadingPosition() {
+      const cfi = this.listeningJump?.cfi
+      this.listeningJump = null
+      this.readAlong?.pauseFollowing()
+      this.ownNavigationUntil = Date.now() + OWN_NAVIGATION_MS
+      if (cfi) this.rendition?.display(cfi)
+    },
+    /** A highlight chosen in the list: turn to it (the narration is not changed) */
+    goToAnnotation(annotation) {
+      if (!this.readAlong) return
+      this.ownNavigationUntil = Date.now() + OWN_NAVIGATION_MS
+      this.readAlong.goToTime(annotation.start)
+      this.startReadAlongLoop()
+    },
+    openPopup({ first, last, rect, annotation }) {
+      const index = this.readAlong.index
+      this.popup = {
+        selection: { first, last, text: wordsText(index, first, last), start: index.wordStarts[first], end: index.wordStarts[last] },
+        annotation,
+        anchor: rect,
+        playTime: index.wordStarts[first],
+        // Closed when the page turns (epub.js also reports the same page again, e.g. after re-displaying it)
+        page: this.currentPageCfi()
+      }
+    },
+    currentPageCfi() {
+      try {
+        return this.rendition?.currentLocation()?.start?.cfi || null
+      } catch (error) {
+        return null
+      }
+    },
+    closePopup() {
+      this.popup = null
+      this.readAlong?.clearTextSelection()
     },
     startReadAlongLoop() {
       this.stopReadAlongLoop()
-      if (!this.readAlong || !this.isStreamingThisItem) return
+      if (!this.readAlong) return
+      if (!this.isStreamingThisItem) {
+        // Not in the player: keep turning to a chosen position (where the user stopped listening, a highlight)
+        this.readAlongTimer = setInterval(this.readAlongTick, READ_ALONG_PAUSED_POLL_MS)
+        this.readAlongTick(true)
+        return
+      }
+      this.staticTime = null
       if (this.isPlaying) {
         // Every frame while playing (a word can last a couple of frames at high speeds), plus a timer in case frames are throttled
         const step = () => {
@@ -240,19 +350,24 @@ export default {
       this.readAlongTimer = null
     },
     readAlongTick(force = false) {
+      if (!this.readAlong) return
       let state = null
-      this.$eventBus.$emit('player-get-time', (value) => (state = value))
-      if (!state || state.libraryItemId !== this.libraryItemId) return
+      if (this.isStreamingThisItem) this.$eventBus.$emit('player-get-time', (value) => (state = value))
       try {
-        this.readAlong.update(state.time, force)
+        if (state?.libraryItemId === this.libraryItemId) this.readAlong.update(state.time, force)
+        else if (this.staticTime !== null && this.staticTime !== undefined) this.readAlong.update(this.staticTime, force)
+        else this.readAlong.pump()
       } catch (error) {
         // Runs every frame: report once instead of flooding the console
         if (!this.readAlongErrorLogged) console.error('EpubReader read along failed', error)
         this.readAlongErrorLogged = true
       }
     },
-    playFromHere() {
-      const startTime = this.readAlong?.firstVisibleWordTime() ?? 0
+    /** @param {number} [time] - a chosen word; the first narrated word of the page if not given */
+    playFromHere(time) {
+      this.closePopup()
+      this.listeningJump = null
+      const startTime = typeof time === 'number' ? time : this.readAlong?.firstVisibleWordTime() ?? 0
       // Highlight the new start first, so following does not turn back to the old narration page
       this.readAlong?.startAt(startTime)
       if (this.isStreamingThisItem) {
@@ -265,6 +380,26 @@ export default {
     },
     returnToNarration() {
       this.readAlong?.resumeFollowing()
+    },
+    /**
+     * The user read on with the audio not playing: the listening position follows the page (the first narrated word on it),
+     * also in the player if the book is open there, so pressing play continues from the page
+     *
+     * @returns {Object} progress fields to save with the ebook location
+     */
+    readingProgress() {
+      if (!this.syncReadingListening || !this.readAlong || this.readAlong.following || Date.now() < (this.ownNavigationUntil || 0)) return {}
+      if (this.isStreamingThisItem && this.isPlaying) return {} // reading ahead while listening
+      const time = this.readAlong.firstVisibleWordTime()
+      if (time === null) return {}
+      this.listeningJump = null
+      if (this.isStreamingThisItem) {
+        this.readAlong.startAt(time)
+        this.readAlong.pauseFollowing()
+        this.$eventBus.$emit('playback-seek', time)
+      }
+      const duration = this.libraryItem?.media?.duration
+      return duration ? { currentTime: time, duration, progress: Math.min(1, time / duration) } : { currentTime: time }
     },
     /** @returns {object} Returns the chapter that the `position` in the book is in */
     findChapterFromPosition(chapters, position) {
@@ -406,18 +541,22 @@ export default {
     },
     /** @param {string} location - CFI of the new location */
     relocated(location) {
+      if (this.popup && this.popup.page !== location.start.cfi) this.closePopup()
       if (this.savedEbookLocation === location.start.cfi) {
         return
       }
 
+      const reading = this.keepProgress ? this.readingProgress() : {}
       if (location.end.percentage) {
         this.updateProgress({
           ebookLocation: location.start.cfi,
-          ebookProgress: location.end.percentage
+          ebookProgress: location.end.percentage,
+          ...reading
         })
       } else {
         this.updateProgress({
-          ebookLocation: location.start.cfi
+          ebookLocation: location.start.cfi,
+          ...reading
         })
       }
     },
@@ -457,7 +596,7 @@ export default {
       })
 
       // load saved progress
-      reader.rendition.display(this.savedEbookLocation || reader.book.locations.start)
+      this.initialDisplay = Promise.resolve(reader.rendition.display(this.savedEbookLocation || reader.book.locations.start))
 
       reader.rendition.on('rendered', (section, view) => {
         this.applyTheme()
@@ -473,7 +612,12 @@ export default {
           reader.rendition.on('relocated', reader.relocated)
           reader.rendition.on('keydown', reader.keyUp)
 
+          // A click or touch in the book closes the menu of chosen words (the book is in iframes, the menu does not see it)
+          reader.rendition.on('mousedown', () => {
+            if (this.popup) this.closePopup()
+          })
           reader.rendition.on('touchstart', (event) => {
+            if (this.popup) this.closePopup()
             this.$emit('touchstart', event)
           })
           reader.rendition.on('touchend', (event) => {
@@ -577,6 +721,10 @@ export default {
       })
     }
   },
+  created() {
+    this.staticTime = null
+    this.ownNavigationUntil = 0
+  },
   mounted() {
     this.windowWidth = window.innerWidth
     this.windowHeight = window.innerHeight
@@ -585,6 +733,8 @@ export default {
   },
   beforeDestroy() {
     window.removeEventListener('resize', this.resize)
+    clearTimeout(this.listeningJumpTimeout)
+    this.releaseAnnotations?.()
     this.stopReadAlongLoop()
     this.readAlong?.destroy()
     this.book?.destroy()

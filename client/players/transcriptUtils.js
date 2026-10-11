@@ -31,11 +31,15 @@ export function findLastLessOrEqual(sorted, value) {
 
 /**
  * Flat lookup tables for syncing and a list of rows to render (chapter headings + segments).
+ * With `paragraphs`, rows are the book's paragraphs and headings instead (ebook transcripts: segments are
+ * sentences, `paragraph` marks the first sentence of a paragraph and `heading` a heading): row
+ * { type: 'paragraph', segments: [segment indexes], heading, afterHeading }.
  *
- * @param {{segments: {start:number, end:number, text:string, words:{w:string, start:number, end:number}[]}[]}} transcript
+ * @param {{segments: {start:number, end:number, text:string, words:{w:string, start:number, end:number}[], paragraph?:boolean, heading?:boolean, spine?:number}[]}} transcript
  * @param {{start:number, title:string}[]} [chapters]
+ * @param {{paragraphs?: boolean}} [options]
  */
-export function buildTranscriptIndex(transcript, chapters = []) {
+export function buildTranscriptIndex(transcript, chapters = [], { paragraphs = false } = {}) {
   const segments = transcript.segments || []
   let numWords = 0
   for (const segment of segments) numWords += segment.words.length
@@ -57,8 +61,22 @@ export function buildTranscriptIndex(transcript, chapters = []) {
       rows.push({ type: 'chapter', chapter: sortedChapters[chapterIndex] })
       chapterIndex++
     }
-    segmentRow[si] = rows.length
-    rows.push({ type: 'segment', segment: si })
+    if (paragraphs) {
+      const last = rows[rows.length - 1]
+      const previous = segments[si - 1]
+      const continues = last?.type === 'paragraph' && !segment.paragraph && !!segment.heading === !!previous.heading && segment.spine === previous.spine
+      if (continues) {
+        last.segments.push(si)
+      } else {
+        // Books do not indent the first paragraph after a heading or at the start of a section
+        const afterHeading = !last || last.type === 'chapter' || last.heading || segment.spine !== previous?.spine
+        rows.push({ type: 'paragraph', segments: [si], heading: !!segment.heading, afterHeading })
+      }
+      segmentRow[si] = rows.length - 1
+    } else {
+      segmentRow[si] = rows.length
+      rows.push({ type: 'segment', segment: si })
+    }
 
     segmentFirstWord[si] = wordIndex
     segmentStarts[si] = segment.start
@@ -117,6 +135,59 @@ export function highlightedWords(index, word, count) {
   return { first, last: first + size - 1 }
 }
 
+/** @returns {string} the text of a segment (sentence) */
+export function segmentText(segment) {
+  return (segment.text || segment.words.map((word) => word.w).join(' ')).trim()
+}
+
+/**
+ * Sentences of a transcript on the book timeline, for the media notification (current sentence) and the sleep
+ * timer (stop at the end of a sentence or paragraph). Paragraphs are those of the book for ebook transcripts,
+ * every segment otherwise.
+ *
+ * @returns {{starts: number[], ends: number[], texts: string[], paragraphEnds: number[]}}
+ */
+export function buildSentenceTimeline(transcript) {
+  const starts = []
+  const ends = []
+  const texts = []
+  const paragraphEnds = []
+  const segments = (transcript?.segments || []).filter((segment) => Number.isFinite(segment.start) && Number.isFinite(segment.end))
+  const hasParagraphs = segments.some((segment) => segment.paragraph)
+  for (let si = 0; si < segments.length; si++) {
+    const segment = segments[si]
+    starts.push(segment.start)
+    ends.push(Math.max(segment.start, segment.end))
+    texts.push(segmentText(segment))
+    const next = segments[si + 1]
+    if (!hasParagraphs || !next || next.paragraph || !!next.heading !== !!segment.heading) paragraphEnds.push(ends[ends.length - 1])
+  }
+  return { starts, ends, texts, paragraphEnds }
+}
+
+/** Longest a sleep timer keeps playing to finish a sentence or a paragraph (seconds of book time) */
+export const SLEEP_TIMER_FINISH_LIMITS = { sentence: 30, paragraph: 120 }
+
+/**
+ * Where playback should stop when a sleep timer ends at `time`: the end of the sentence or paragraph being read.
+ *
+ * @param {ReturnType<typeof buildSentenceTimeline>} timeline
+ * @param {number} time
+ * @param {'sentence'|'paragraph'} mode
+ * @returns {number|null} book time to stop at, or null to stop right away (between sentences, or too far)
+ */
+export function sleepTimerStopTime(timeline, time, mode) {
+  if (!timeline || !SLEEP_TIMER_FINISH_LIMITS[mode]) return null
+  const sentence = findLastLessOrEqual(timeline.starts, time + WORD_LOOKAHEAD_SEC)
+  if (sentence < 0 || time >= timeline.ends[sentence]) return null
+  let stopAt = timeline.ends[sentence]
+  if (mode === 'paragraph') {
+    const paragraph = timeline.paragraphEnds.findIndex((end) => end >= stopAt)
+    if (paragraph >= 0) stopAt = timeline.paragraphEnds[paragraph]
+  }
+  return stopAt - time <= SLEEP_TIMER_FINISH_LIMITS[mode] ? stopAt : null
+}
+
 function normalizeSearchText(text) {
   return text.toLowerCase().replace(/\s+/g, ' ').trim()
 }
@@ -131,7 +202,7 @@ export function searchTranscript(index, query, limit = 2000) {
   const needle = normalizeSearchText(query || '')
   if (!needle) return []
   if (!index.searchTexts) {
-    index.searchTexts = index.segments.map((segment) => normalizeSearchText(segment.text || segment.words.map((w) => w.w).join(' ')))
+    index.searchTexts = index.segments.map((segment) => normalizeSearchText(segmentText(segment)))
   }
   const results = []
   for (let si = 0; si < index.searchTexts.length && results.length < limit; si++) {

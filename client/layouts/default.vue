@@ -27,6 +27,8 @@
 </template>
 
 <script>
+import { getAnnotationStore } from '@/players/annotationStore'
+
 export default {
   middleware: 'authenticated',
   data() {
@@ -267,6 +269,11 @@ export default {
         this.$store.commit('tasks/removeQueuedEmbedLId', data.libraryItemId)
       }
     },
+    /** Highlights or notes changed (in another tab or on another device): reload them where the book is open */
+    annotationsUpdated({ libraryItemId }) {
+      const store = getAnnotationStore(this.$axios)
+      if (store.items.has(libraryItemId)) store.load(libraryItemId)
+    },
     userUpdated(user) {
       if (this.$store.state.user.user.id === user.id) {
         this.$store.commit('user/setUser', user)
@@ -442,6 +449,7 @@ export default {
       this.socket.on('user_stream_update', this.userStreamUpdate)
       this.socket.on('user_session_closed', this.userSessionClosed)
       this.socket.on('user_item_progress_updated', this.userMediaProgressUpdate)
+      this.socket.on('annotations_updated', this.annotationsUpdated)
 
       // Collection Listeners
       this.socket.on('collection_added', this.collectionAdded)

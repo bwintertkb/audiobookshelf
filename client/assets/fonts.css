@@ -5,6 +5,15 @@
   src: url(~static/fonts/MaterialSymbolsRounded.woff2) format('woff2');
 }
 
+/* Lexend (SIL Open Font License, static/fonts/Lexend/OFL.txt): reading font option of the transcript */
+@font-face {
+  font-family: 'Lexend';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url(~static/fonts/Lexend/Lexend.woff2) format('woff2');
+}
+
 .material-symbols {
   font-family: 'Material Symbols Rounded';
   font-weight: normal;

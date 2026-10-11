@@ -1,11 +1,55 @@
 import Vue from 'vue'
 import TranscriptPanel from '@/components/player/TranscriptPanel.vue'
 import Tooltip from '@/components/ui/Tooltip.vue'
+import ToggleBtns from '@/components/ui/ToggleBtns.vue'
 import LoadingSpinner from '@/components/widgets/LoadingSpinner.vue'
+import ReadAlongPopup from '@/components/player/ReadAlongPopup.vue'
 import Strings from '@/strings/en-us.json'
 import { allPlaybackRates } from '../../../support/playbackRates'
 
 const WORD_DURATION = 0.36 // ~150k words in 15 hours
+const STUBS = { 'ui-tooltip': Tooltip, 'ui-toggle-btns': ToggleBtns, 'widgets-loading-spinner': LoadingSpinner, 'player-read-along-popup': ReadAlongPopup, 'modals-annotations-modal': { render: (h) => h('div') } }
+
+/** $axios.$request of the annotation API: keeps the saved annotations */
+function annotationRequest(annotations = []) {
+  const saved = [...annotations]
+  const request = cy.stub().callsFake(({ method, url, data }) => {
+    if (method === 'GET') return Promise.resolve({ annotations: [...saved] })
+    if (method === 'PUT') {
+      const index = saved.findIndex((a) => a.id === data.id)
+      if (index >= 0) saved[index] = data
+      else saved.push(data)
+      return Promise.resolve({ annotation: data })
+    }
+    if (method === 'DELETE') {
+      const id = url.split('/').pop()
+      saved.splice(
+        saved.findIndex((a) => a.id === id),
+        1
+      )
+      return Promise.resolve()
+    }
+    return Promise.reject(new Error(`Unexpected ${method} ${url}`))
+  })
+  request.saved = saved
+  return request
+}
+
+function baseMocks(settings) {
+  return {
+    $store: {
+      getters: { 'user/getUserSetting': (key) => settings[key] ?? null, 'user/getUserBookmarksForItem': () => [] },
+      dispatch: cy.stub().callsFake((action, payload) => {
+        if (action === 'user/updateUserSettings') Object.assign(settings, payload)
+      }),
+      commit: cy.stub()
+    },
+    $strings: Strings,
+    $getString: (key, subs = []) => Strings[key].replace(/\{(\d+)\}/g, (match, n) => subs[n]),
+    $config: { routerBasePath: '/audiobookshelf' },
+    $toast: { success: cy.stub(), error: cy.stub(), info: cy.stub() }
+  }
+}
 const WORDS_PER_SEGMENT = 14
 const LOOKAHEAD = 0.03
 
@@ -76,19 +120,9 @@ function mountPanel({ libraryItemId = 'book-1', time = 0, playing = true, librar
     const id = url.split('/')[3]
     return Promise.resolve(getBook(id).transcript)
   })
-  const mocks = {
-    $axios: { $get: axiosGet },
-    $store: {
-      getters: { 'user/getUserSetting': (key) => settings[key] ?? null },
-      dispatch: cy.stub().callsFake((action, payload) => {
-        if (action === 'user/updateUserSettings') Object.assign(settings, payload)
-      })
-    },
-    $strings: Strings,
-    $getString: (key, subs = []) => Strings[key].replace(/\{(\d+)\}/g, (match, n) => subs[n])
-  }
   const settings = Vue.observable({ transcriptFontScale: 1, readAlongWords })
-  const stubs = { 'ui-tooltip': Tooltip, 'widgets-loading-spinner': LoadingSpinner }
+  const mocks = { ...baseMocks(settings), $axios: { $get: axiosGet, $request: annotationRequest() } }
+  const stubs = STUBS
   const propsData = { libraryItem: libraryItem || book.libraryItem, chapters: book.chapters, getCurrentTime: () => clock.getCurrentTime(), playing }
   return cy.mount(TranscriptPanel, { propsData, mocks, stubs }).then(({ wrapper }) => {
     return cy
@@ -123,15 +157,18 @@ describe('<TranscriptPanel />', () => {
         const highlight = CSS.highlights.get('abs-transcript-words')
         return highlight && highlight.size ? [...highlight][0].toString() : ''
       }
-      const button = `button[aria-label^="${Strings.LabelReadAlongHighlight}"]`
+      // The number of words is set in the display menu
+      const count = (n) => cy.get('.transcript-display-menu').contains('p', Strings.LabelReadAlongHighlight).parent().contains('button', String(n))
       expect(vm.highlightApi, 'CSS Custom Highlight API').to.be.true
       cy.get('.transcript-word-active').should('have.attr', 'data-wi', '20')
       cy.wrap(null).should(() => expect(highlightedText()).to.equal(text(19, 21)))
-      cy.get(button).should('have.attr', 'aria-label', `${Strings.LabelReadAlongHighlight}: 3 words`).click()
+      cy.get(`button[aria-label="${Strings.LabelTranscriptDisplay}"]`).click()
+      count(3).should('have.class', 'selected')
+      count(5).click()
       cy.wrap(null).should(() => expect(highlightedText()).to.equal(text(18, 22)))
-      cy.get(button).click()
+      count(1).click()
       cy.wrap(null).should(() => expect(highlightedText()).to.equal(text(20, 20)))
-      cy.get(button).click()
+      count(3).click()
       cy.wrap(null).should(() => expect(highlightedText()).to.equal(text(19, 21)))
       cy.get('.transcript-word-active').should('have.length', 1)
 
@@ -280,6 +317,7 @@ describe('<TranscriptPanel />', () => {
 
   it('changes the font size and keeps the current word in view', () => {
     mountPanel({ time: 20000, playing: false }).then(({ vm }) => {
+      cy.get(`button[aria-label="${Strings.LabelTranscriptDisplay}"]`).click()
       cy.get('button[aria-label="Font scale +"]').click().click().click()
       cy.get('.transcript-word-active').should(($el) => {
         expect(isInside($el[0], vm.$refs.scroller)).to.be.true
@@ -307,8 +345,8 @@ describe('<TranscriptPanel />', () => {
     })
   })
 
-  it('shows ebook transcripts with the book headings and paragraphs instead of chapter markers', () => {
-    const words = (text, start) => text.split(' ').map((w, i) => ({ w, start: start + i * 0.4, end: start + i * 0.4 + 0.3 }))
+  describe('ebook transcripts', () => {
+    const words = (text, start) => text.split(' ').map((w, i) => ({ w, start: Math.round((start + i * 0.4) * 1000) / 1000, end: Math.round((start + i * 0.4 + 0.3) * 1000) / 1000 }))
     const segment = (text, start, flags = {}) => {
       const ws = words(text, start)
       return { start, end: ws[ws.length - 1].end, text, words: ws, ...flags }
@@ -318,32 +356,162 @@ describe('<TranscriptPanel />', () => {
       libraryItemId: 'ebook-book',
       source: 'ebook',
       files: [{ ino: 'f1', startOffset: 0, duration: 100 }],
-      segments: [segment('The Selfish Giant.', 10, { heading: true, paragraph: true }), segment('Every afternoon, as they were coming from school, the children used to go and play in the Giant’s garden.', 12, { paragraph: true }), segment('It was a large lovely garden, with soft green grass.', 20), segment('“How happy we are here!” they cried to each other.', 30, { paragraph: true })]
+      segments: [
+        segment('The Selfish Giant.', 10, { heading: true, paragraph: true, spine: 2 }),
+        segment('Every afternoon, as they were coming from school, the children used to go and play in the Giant’s garden.', 12, { paragraph: true, spine: 2 }),
+        segment('It was a large lovely garden, with soft green grass.', 20, { spine: 2 }),
+        segment('“How happy we are here!” they cried to each other.', 30, { paragraph: true, spine: 2 })
+      ]
     }
-    const libraryItem = { id: 'ebook-book', hasTranscript: true, updatedAt: 1, media: { tracks: [{ ino: 'f1', startOffset: 0, duration: 100 }] } }
-    const mocks = {
-      $axios: { $get: cy.stub().resolves(transcript) },
-      $store: { getters: { 'user/getUserSetting': () => null }, dispatch: cy.stub() },
-      $strings: Strings,
-      $getString: (key) => Strings[key]
-    }
+    // Word indexes: heading 0-2, first paragraph 3-21 and 22-31 ("It was a large lovely garden, ..."), last paragraph 32-41
+    const libraryItem = { id: 'ebook-book', hasTranscript: true, updatedAt: 1, media: { ebookFormat: 'epub', metadata: { title: 'The Happy Prince', authorName: 'Oscar Wilde' }, tracks: [{ ino: 'f1', startOffset: 0, duration: 100 }] } }
     const chapters = [{ id: 0, start: 0, end: 100, title: 'Chapter 1' }]
-    cy.mount(TranscriptPanel, { propsData: { libraryItem, chapters, getCurrentTime: () => 21, playing: false }, mocks, stubs: { 'ui-tooltip': Tooltip, 'widgets-loading-spinner': LoadingSpinner } })
-    cy.get('#transcript-panel .transcript-segment-heading').should('have.text', 'The Selfish Giant. ')
-    cy.get('#transcript-panel h3').should('not.exist') // no duplicate "Chapter 1" marker
-    cy.get('#transcript-panel .transcript-row-paragraph').should('have.length', 3)
-    cy.get('#transcript-panel .transcript-word-active').should('have.text', 'a') // "a" starts at 20.8 s, "large" at 21.2 s
-    cy.get('#transcript-panel .transcript-word').contains('Giant’s').should('exist')
+
+    function mountEbookPanel({ settings = {}, request = annotationRequest(), time = 21 } = {}) {
+      const observableSettings = Vue.observable({ transcriptLayout: 'book', transcriptFont: '', readAlongWords: 3, ...settings })
+      const axios = { $get: cy.stub().callsFake((url) => (url.includes('expanded') ? Promise.resolve({ ...libraryItem, expanded: true }) : Promise.resolve(transcript))), $request: request }
+      const mocks = { ...baseMocks(observableSettings), $axios: axios }
+      return cy.mount(TranscriptPanel, { propsData: { libraryItem, chapters, getCurrentTime: () => time, playing: false }, mocks, stubs: STUBS }).then(({ wrapper }) => {
+        return cy
+          .get('#transcript-panel [data-wi]')
+          .should('exist')
+          .then(() => ({ wrapper, vm: wrapper.vm, mocks, settings: observableSettings, request }))
+      })
+    }
+    const highlightText = (name) => {
+      const highlight = CSS.highlights.get(name)
+      return highlight ? [...highlight].map((range) => range.toString().trim()) : []
+    }
+
+    beforeEach(() => {
+      cy.intercept('GET', '**/dictionary/wordnet-3.1-v1/manifest.json', { version: 'wordnet-3.1-v1', shards: ['ga'] })
+      cy.intercept('GET', '**/dictionary/wordnet-3.1-v1/ga.json', { garden: { d: [['n', 'a plot of ground where plants are cultivated', 'the garden was full of flowers']] } })
+    })
+
+    it('lays them out like the book: headings and paragraphs, no chapter markers', () => {
+      mountEbookPanel().then(({ vm }) => {
+        cy.get('#transcript-panel .transcript-book-heading').should('have.text', 'The Selfish Giant. ')
+        cy.get('#transcript-panel h3').should('not.exist') // no duplicate "Chapter 1" marker
+        cy.get('#transcript-panel .transcript-paragraph').should('have.length', 3)
+        // The sentences of a paragraph flow together; the first paragraph after the heading is not indented
+        cy.get('#transcript-panel .transcript-paragraph').eq(1).should('have.class', 'transcript-no-indent').find('.transcript-sentence').should('have.length', 2)
+        cy.get('#transcript-panel .transcript-paragraph').eq(2).should('not.have.class', 'transcript-no-indent').and('have.css', 'text-indent').and('not.equal', '0px')
+        cy.get('#transcript-panel .transcript-word-active').should('have.text', 'a') // "a" starts at 20.8 s, "large" at 21.2 s
+        cy.get('#transcript-panel .transcript-sentence.transcript-segment-active').should('contain.text', 'It was a large lovely garden')
+        // Serif unless another font is chosen
+        cy.get('.transcript-book').should(($el) => expect($el[0].style.fontFamily).to.equal('serif'))
+        cy.then(() => expect(vm.index.rows.map((row) => row.segments)).to.deep.equal([[0], [1, 2], [3]]))
+      })
+    })
+
+    it('switches between the book layout and a sentence per line, and changes the font', () => {
+      mountEbookPanel().then(({ settings }) => {
+        cy.get(`button[aria-label="${Strings.LabelTranscriptDisplay}"]`).click()
+        cy.get('.transcript-display-menu').contains('button', Strings.LabelTranscriptLayoutLines).click()
+        cy.then(() => expect(settings.transcriptLayout).to.equal('lines'))
+        cy.get('#transcript-panel .transcript-segment-heading').should('have.text', 'The Selfish Giant. ')
+        cy.get('#transcript-panel .transcript-row-paragraph').should('have.length', 3)
+        cy.get('#transcript-panel .transcript-paragraph').should('not.exist')
+        cy.get('#transcript-panel .transcript-word-active').should('have.text', 'a')
+        cy.get('[data-wi="0"]')
+          .closest('[style*="translateY"]')
+          .should(($el) => expect($el[0].style.fontFamily).to.equal(''))
+
+        cy.get('.transcript-display-menu').contains('button', 'Lexend').click()
+        cy.then(() => expect(settings.transcriptFont).to.equal('lexend'))
+        cy.get('[data-wi="0"]')
+          .closest('[style*="translateY"]')
+          .should(($el) => expect($el[0].style.fontFamily).to.contain('Lexend'))
+        cy.get('.transcript-display-menu').contains('button', Strings.LabelTranscriptLayoutBook).click()
+        cy.get('#transcript-panel .transcript-paragraph').should('have.length', 3)
+      })
+    })
+
+    it('shows the definition of a right-clicked word, highlights it and adds a note', () => {
+      mountEbookPanel().then(({ vm, request }) => {
+        // "garden." ends the first sentence of the paragraph (word 21)
+        cy.get('[data-wi="21"]').should('have.text', 'garden.').rightclick()
+        cy.get('.readalong-popup').should('contain.text', 'a plot of ground where plants are cultivated').and('contain.text', 'garden')
+        cy.get(`.readalong-popup button[aria-label="${Strings.ButtonHighlight}: ${Strings.LabelColorYellow}"]`).click()
+        cy.then(() => {
+          const put = request.getCalls().find((call) => call.args[0].method === 'PUT')
+          expect(put.args[0].url).to.match(/^\/api\/me\/item\/ebook-book\/annotations\//)
+          expect(put.args[0].data).to.include({ start: vm.index.wordStarts[21], end: vm.index.wordStarts[21], text: 'garden.', color: 'yellow', note: null })
+        })
+        cy.wrap(null).should(() => expect(highlightText('abs-transcript-annotation-yellow')).to.deep.equal(['garden.']))
+
+        // A note: marked after the highlight
+        cy.get(`.readalong-popup button[aria-label="${Strings.ButtonNote}"]`).click()
+        cy.get('.readalong-popup textarea').type('Where the children play')
+        cy.get('.readalong-popup').contains('button', Strings.ButtonSave).click()
+        cy.get('.transcript-note-marker').should('have.length', 1)
+        cy.then(() => expect(request.saved[0]).to.include({ note: 'Where the children play', color: 'yellow' }))
+        cy.get('.readalong-popup button[aria-label="Close"]').click()
+        cy.get('.readalong-popup').should('not.exist')
+
+        // The note marker opens the highlight again: change its colour, then delete it
+        cy.get('.transcript-note-marker').click()
+        cy.get('.readalong-popup').should('contain.text', 'Where the children play')
+        cy.get(`.readalong-popup button[aria-label="${Strings.ButtonHighlight}: ${Strings.LabelColorPink}"]`).click()
+        cy.wrap(null).should(() => {
+          expect(highlightText('abs-transcript-annotation-pink')).to.deep.equal(['garden.'])
+          expect(highlightText('abs-transcript-annotation-yellow')).to.deep.equal([])
+        })
+        cy.get(`.readalong-popup button[aria-label="${Strings.ButtonDeleteHighlight}"]`).click()
+        cy.get('.readalong-popup').should('not.exist')
+        cy.get('.transcript-note-marker').should('not.exist')
+        cy.wrap(null).should(() => expect(highlightText('abs-transcript-annotation-pink')).to.deep.equal([]))
+        cy.then(() => expect(request.saved).to.have.length(0))
+      })
+    })
+
+    it('highlights selected text and plays from it', () => {
+      mountEbookPanel().then(({ wrapper, vm, request }) => {
+        // Select "a large lovely garden," with the mouse
+        cy.then(() => {
+          const from = vm.$refs.window.querySelector('[data-wi="24"]').firstChild
+          const to = vm.$refs.window.querySelector('[data-wi="27"]').firstChild
+          window.getSelection().setBaseAndExtent(from, 0, to, to.length)
+        })
+        cy.get('[data-wi="27"]').trigger('mouseup', { button: 0 })
+        cy.get('.readalong-popup').should('contain.text', '“a large lovely garden,”')
+        cy.get(`.readalong-popup button[aria-label="${Strings.ButtonHighlight}: ${Strings.LabelColorBlue}"]`).click()
+        cy.then(() => expect(request.saved[0]).to.include({ text: 'a large lovely garden,', color: 'blue', start: vm.index.wordStarts[24], end: vm.index.wordStarts[27] }))
+        cy.wrap(null).should(() => expect(highlightText('abs-transcript-annotation-blue')).to.deep.equal(['a large lovely garden,']))
+        cy.get(`.readalong-popup button[aria-label="${Strings.ButtonPlayFromHere}"]`).click()
+        cy.then(() => {
+          expect(wrapper.emitted('seek')[0][0]).to.equal(vm.index.wordStarts[24])
+          expect(wrapper.emitted('play')).to.have.length(1)
+        })
+        cy.get('.readalong-popup').should('not.exist')
+      })
+    })
+
+    it('shows highlights saved before, from the server', () => {
+      const saved = [{ id: 'annotation-1', start: 30, end: 31.2, text: '“How happy we are', color: 'orange', note: 'Joy', createdAt: 1, updatedAt: 1 }]
+      mountEbookPanel({ request: annotationRequest(saved) }).then(() => {
+        cy.wrap(null).should(() => expect(highlightText('abs-transcript-annotation-orange')).to.deep.equal(['“How happy we are']))
+        cy.get('.transcript-note-marker').should('have.length', 1)
+        // Right-clicking a highlighted word opens the highlight
+        cy.get('[data-wi="33"]').should('have.text', 'happy').rightclick()
+        cy.get('.readalong-popup').should('contain.text', 'Joy').find(`button[aria-label="${Strings.ButtonDeleteHighlight}"]`).should('exist')
+      })
+    })
+
+    it('opens the book in the reader', () => {
+      mountEbookPanel().then(({ mocks }) => {
+        cy.get(`button[aria-label="${Strings.ButtonOpenInBook}"]`).click()
+        cy.then(() => {
+          expect(mocks.$axios.$get).to.have.been.calledWith('/api/items/ebook-book?expanded=1')
+          expect(mocks.$store.commit).to.have.been.calledWith('showEReader', { libraryItem: { ...libraryItem, expanded: true }, keepProgress: true })
+        })
+      })
+    })
   })
 
   it('shows a message when the transcript is missing', () => {
-    const mocks = {
-      $axios: { $get: cy.stub().rejects({ response: { status: 404 } }) },
-      $store: { getters: { 'user/getUserSetting': () => null }, dispatch: cy.stub() },
-      $strings: Strings,
-      $getString: (key) => Strings[key]
-    }
-    cy.mount(TranscriptPanel, { propsData: { libraryItem: { id: 'x', media: { tracks: [] } }, getCurrentTime: () => 0 }, mocks, stubs: { 'ui-tooltip': Tooltip, 'widgets-loading-spinner': LoadingSpinner } })
+    const mocks = { ...baseMocks({}), $axios: { $get: cy.stub().rejects({ response: { status: 404 } }), $request: annotationRequest() } }
+    cy.mount(TranscriptPanel, { propsData: { libraryItem: { id: 'x', media: { tracks: [] } }, getCurrentTime: () => 0 }, mocks, stubs: STUBS })
     cy.contains(Strings.MessageTranscriptNotFound).should('be.visible')
   })
 })

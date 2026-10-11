@@ -1,6 +1,6 @@
 <template>
   <div v-if="streamLibraryItem" id="mediaPlayerContainer" class="w-full fixed bottom-0 left-0 right-0 h-48 lg:h-40 z-50 bg-primary px-2 lg:px-4 pb-1 lg:pb-4 pt-2">
-    <player-transcript-panel v-if="showTranscriptPanel && streamHasTranscript" :library-item="streamLibraryItem" :chapters="chapters" :get-current-time="getPlayerCurrentTime" :playing="isPlaying" @seek="seek" @close="setShowTranscriptPanel(false)" />
+    <player-transcript-panel v-if="showTranscriptPanel && streamHasTranscript && !$store.state.showEReader" :library-item="streamLibraryItem" :chapters="chapters" :get-current-time="getPlayerCurrentTime" :playing="isPlaying" @seek="seek" @play="playerHandler.play()" @close="setShowTranscriptPanel(false)" />
 
     <div class="absolute left-2 top-2 lg:left-4 cursor-pointer">
       <covers-book-cover expand-on-click :library-item="streamLibraryItem" :width="bookCoverWidth" :book-cover-aspect-ratio="coverAspectRatio" />
@@ -62,7 +62,7 @@
 
     <modals-bookmarks-modal v-model="showBookmarksModal" :bookmarks="bookmarks" :current-time="bookmarkCurrentTime" :playback-rate="currentPlaybackRate" :library-item-id="libraryItemId" @select="selectBookmark" />
 
-    <modals-sleep-timer-modal v-model="showSleepTimerModal" :timer-set="sleepTimerSet" :timer-type="sleepTimerType" :remaining="sleepTimerRemaining" :has-chapters="!!chapters.length" @set="setSleepTimer" @cancel="cancelSleepTimer" @increment="incrementSleepTimer" @decrement="decrementSleepTimer" />
+    <modals-sleep-timer-modal v-model="showSleepTimerModal" :timer-set="sleepTimerSet" :timer-type="sleepTimerType" :remaining="sleepTimerRemaining" :has-chapters="!!chapters.length" :has-transcript="streamHasTranscript" @set="setSleepTimer" @cancel="cancelSleepTimer" @increment="incrementSleepTimer" @decrement="decrementSleepTimer" />
 
     <modals-player-queue-items-modal v-model="showPlayerQueueItemsModal" />
   </div>
@@ -70,6 +70,11 @@
 
 <script>
 import PlayerHandler from '@/players/PlayerHandler'
+import { buildSentenceTimeline, findLastLessOrEqual, sleepTimerStopTime, WORD_LOOKAHEAD_SEC } from '@/players/transcriptUtils'
+import { loadTranscript } from '@/players/transcriptCache'
+
+/** Longest wait between checks while a sleep timer finishes a sentence (speed changes, seeks) */
+const SLEEP_FINISH_CHECK_MS = 1000
 
 export default {
   data() {
@@ -92,7 +97,9 @@ export default {
       syncFailedToast: null,
       coverAspectRatio: 1,
       lastChapterId: null,
-      showTranscriptPanel: false
+      showTranscriptPanel: false,
+      // A sleep timer ended and playback stops at this book time (end of the sentence or paragraph)
+      sleepTimerFinishAt: null
     }
   },
   computed: {
@@ -259,15 +266,46 @@ export default {
       }
     },
     sleepTimerEnd() {
+      // Countdown timers of books with a transcript finish the sentence or paragraph being read (user setting)
+      const stopAt = this.sleepTimerType === this.$constants.SleepTimerTypes.COUNTDOWN && this.isPlaying ? this.sleepTimerStopTime() : null
+      if (stopAt !== null) {
+        clearInterval(this.sleepTimer)
+        this.sleepTimer = null
+        this.sleepTimerRemaining = 0
+        this.sleepTimerFinishAt = stopAt
+        this.checkSleepTimerFinish()
+        return
+      }
+      this.stopForSleepTimer()
+    },
+    stopForSleepTimer() {
       this.clearSleepTimer()
       this.playerHandler.pause()
       this.$toast.info(this.$strings.ToastSleepTimerDone)
+    },
+    sleepTimerStopTime() {
+      const mode = this.$store.getters['user/getUserSetting']('sleepTimerFinish')
+      if (!this.readAlongTimeline || (mode !== 'sentence' && mode !== 'paragraph')) return null
+      return sleepTimerStopTime(this.readAlongTimeline, this.playerHandler.getCurrentTime(), mode)
+    },
+    checkSleepTimerFinish() {
+      clearTimeout(this.sleepTimerFinishTimeout)
+      if (this.sleepTimerFinishAt === null) return
+      const time = this.playerHandler.getCurrentTime()
+      if (time >= this.sleepTimerFinishAt - 0.05 || !this.isPlaying) {
+        this.stopForSleepTimer()
+        return
+      }
+      const waitMs = ((this.sleepTimerFinishAt - time) / (this.currentPlaybackRate || 1)) * 1000 + 20
+      this.sleepTimerFinishTimeout = setTimeout(this.checkSleepTimerFinish, Math.min(SLEEP_FINISH_CHECK_MS, waitMs))
     },
     cancelSleepTimer() {
       this.showSleepTimerModal = false
       this.clearSleepTimer()
     },
     clearSleepTimer() {
+      clearTimeout(this.sleepTimerFinishTimeout)
+      this.sleepTimerFinishAt = null
       clearInterval(this.sleepTimer)
       this.sleepTimerRemaining = 0
       this.sleepTimer = null
@@ -325,6 +363,7 @@ export default {
       if (this.$refs.audioPlayer) {
         this.$refs.audioPlayer.setCurrentTime(time)
       }
+      this.updateMediaSessionSentence(time)
 
       if (this.sleepTimerType === this.$constants.SleepTimerTypes.CHAPTER && this.sleepTimerSet) {
         this.checkChapterEnd()
@@ -394,6 +433,31 @@ export default {
         navigator.mediaSession.playbackState = this.isPlaying ? 'playing' : 'paused'
       }
     },
+    /** The sentences of the playing book's transcript (sleep timer, media controls) */
+    async loadReadAlongTimeline() {
+      const libraryItem = this.streamLibraryItem
+      this.readAlongTimeline = null
+      this.mediaSessionSentence = null
+      if (!libraryItem || !this.streamHasTranscript) return
+      try {
+        const transcript = await loadTranscript(this.$axios, libraryItem)
+        if (this.streamLibraryItem?.id !== libraryItem.id) return
+        this.readAlongTimeline = Object.freeze(buildSentenceTimeline(transcript))
+      } catch (error) {
+        console.error('[MediaPlayerContainer] Failed to load the transcript', error)
+      }
+    },
+    /** The browser's media controls show the sentence being read (user setting) */
+    updateMediaSessionSentence(time) {
+      if (!('mediaSession' in navigator) || !navigator.mediaSession.metadata) return
+      const timeline = this.readAlongTimeline
+      const enabled = timeline && this.$store.getters['user/getUserSetting']('readAlongMediaSession') !== false
+      const sentence = enabled ? findLastLessOrEqual(timeline.starts, time + WORD_LOOKAHEAD_SEC) : -1
+      const text = sentence >= 0 ? timeline.texts[sentence] : null
+      if (text === this.mediaSessionSentence) return
+      this.mediaSessionSentence = text
+      navigator.mediaSession.metadata.artist = text || this.playerHandler.displayAuthor || this.mediaMetadata.authorName || 'Unknown'
+    },
     setMediaSession() {
       if (!this.streamLibraryItem) {
         console.error('setMediaSession: No library item set')
@@ -424,6 +488,8 @@ export default {
           chapterInfo
         })
         console.log('Set media session metadata', navigator.mediaSession.metadata)
+        this.mediaSessionSentence = null
+        this.loadReadAlongTimeline()
 
         navigator.mediaSession.setActionHandler('play', this.mediaSessionPlay)
         navigator.mediaSession.setActionHandler('pause', this.mediaSessionPause)
@@ -565,6 +631,11 @@ export default {
         this.$store.commit('setMediaPlaying', null)
       }
     }
+  },
+  created() {
+    // Large, non-reactive data
+    this.readAlongTimeline = null
+    this.mediaSessionSentence = null
   },
   mounted() {
     this.showTranscriptPanel = !!this.$store.getters['user/getUserSetting']('showTranscriptPanel')

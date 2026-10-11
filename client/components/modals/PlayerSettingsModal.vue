@@ -9,6 +9,12 @@
         </div>
       </div>
       <div class="flex items-center mb-4">
+        <ui-toggle-switch v-model="readAlongMediaSession" @input="setReadAlongMediaSession" />
+        <div class="pl-4">
+          <span>{{ $strings.LabelReadAlongMediaSession }}</span>
+        </div>
+      </div>
+      <div class="flex items-center mb-4">
         <ui-select-input v-model="jumpForwardAmount" :label="$strings.LabelJumpForwardAmount" menuMaxHeight="250px" :items="jumpValues" @input="setJumpForwardAmount" />
       </div>
       <div class="flex items-center mb-4">
@@ -41,6 +47,7 @@ export default {
   data() {
     return {
       useChapterTrack: false,
+      readAlongMediaSession: true,
       jumpValues: [
         { text: this.$getString('LabelTimeDurationXSeconds', ['10']), value: 10 },
         { text: this.$getString('LabelTimeDurationXSeconds', ['15']), value: 15 },
@@ -88,6 +95,9 @@ export default {
     }
   },
   methods: {
+    setReadAlongMediaSession() {
+      this.$store.dispatch('user/updateUserSettings', { readAlongMediaSession: this.readAlongMediaSession })
+    },
     setUseChapterTrack() {
       this.$store.dispatch('user/updateUserSettings', { useChapterTrack: this.useChapterTrack })
     },
@@ -116,6 +126,7 @@ export default {
     },
     settingsUpdated() {
       this.useChapterTrack = this.$store.getters['user/getUserSetting']('useChapterTrack')
+      this.readAlongMediaSession = this.$store.getters['user/getUserSetting']('readAlongMediaSession') !== false
       this.jumpForwardAmount = this.$store.getters['user/getUserSetting']('jumpForwardAmount')
       this.jumpBackwardAmount = this.$store.getters['user/getUserSetting']('jumpBackwardAmount')
       this.playbackRateIncrementDecrement = this.$store.getters['user/getUserSetting']('playbackRateIncrementDecrement')

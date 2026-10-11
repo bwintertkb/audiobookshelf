@@ -7,6 +7,7 @@ const { sort } = require('../libs/fastSort')
 const { toNumber, isNullOrNaN, isUUID } = require('../utils/index')
 const userStats = require('../utils/queries/userStats')
 const parseUserAgent = require('../utils/parsers/parseUserAgent')
+const AnnotationManager = require('../managers/AnnotationManager')
 
 /**
  * @typedef RequestUserObject
@@ -652,6 +653,69 @@ class MeController {
     }
     const data = await userStats.getStatsForYear(req.user.id, year)
     res.json(data)
+  }
+
+  /**
+   * Library item the user can access, or sends 404 / 403
+   *
+   * @param {RequestWithUser} req
+   * @param {Response} res
+   */
+  async getAccessibleLibraryItem(req, res) {
+    const libraryItem = await Database.libraryItemModel.getExpandedById(req.params.id)
+    if (!libraryItem) {
+      res.sendStatus(404)
+      return null
+    }
+    if (!req.user.checkCanAccessLibraryItem(libraryItem)) {
+      Logger.error(`[MeController] User "${req.user.username}" attempted to access annotations of library item "${req.params.id}" without access`)
+      res.sendStatus(403)
+      return null
+    }
+    return libraryItem
+  }
+
+  /**
+   * GET: /api/me/item/:id/annotations
+   * Highlights and notes of the user in the item's read-along transcript
+   *
+   * @param {RequestWithUser} req
+   * @param {Response} res
+   */
+  async getAnnotations(req, res) {
+    if (!(await this.getAccessibleLibraryItem(req, res))) return
+    res.json({ annotations: await AnnotationManager.getAnnotations(req.params.id, req.user.id) })
+  }
+
+  /**
+   * PUT: /api/me/item/:id/annotations/:annotationId
+   * Create or replace a highlight (the copy changed last wins)
+   *
+   * @param {RequestWithUser} req
+   * @param {Response} res
+   */
+  async saveAnnotation(req, res) {
+    if (!(await this.getAccessibleLibraryItem(req, res))) return
+    const { annotation, error } = AnnotationManager.validate(req.body, req.params.annotationId)
+    if (error) return res.status(400).send(error)
+    const result = await AnnotationManager.saveAnnotation(req.params.id, req.user.id, annotation)
+    if (result.error) return res.status(400).send(result.error)
+    SocketAuthority.clientEmitter(req.user.id, 'annotations_updated', { libraryItemId: req.params.id })
+    res.json({ annotation: result.annotation })
+  }
+
+  /**
+   * DELETE: /api/me/item/:id/annotations/:annotationId
+   *
+   * @param {RequestWithUser} req
+   * @param {Response} res
+   */
+  async removeAnnotation(req, res) {
+    if (!(await this.getAccessibleLibraryItem(req, res))) return
+    const removed = await AnnotationManager.removeAnnotation(req.params.id, req.user.id, req.params.annotationId)
+    if (!removed) return res.sendStatus(404)
+    SocketAuthority.clientEmitter(req.user.id, 'annotations_updated', { libraryItemId: req.params.id })
+    res.sendStatus(200)
   }
 }
 module.exports = new MeController()

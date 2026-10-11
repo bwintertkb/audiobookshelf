@@ -7,6 +7,9 @@
       <button v-if="hasSettings" @click="openSettings" type="button" aria-label="Ereader settings" class="mx-4 inline-flex opacity-80 hover:opacity-100">
         <span class="material-symbols text-1.5xl">settings</span>
       </button>
+      <button v-if="readAlongAvailable" @click="showAnnotations = true" type="button" :aria-label="$strings.HeaderNotesAndHighlights" class="inline-flex opacity-80 hover:opacity-100">
+        <span class="material-symbols text-1.5xl">sticky_note_2</span>
+      </button>
     </div>
 
     <div class="absolute top-4 left-1/2 transform -translate-x-1/2">
@@ -23,7 +26,10 @@
       </button>
     </div>
 
-    <component v-if="componentName" ref="readerComponent" :is="componentName" :library-item="selectedLibraryItem" :player-open="!!streamLibraryItem" :keep-progress="keepProgress" :file-id="ebookFileId" @touchstart="touchstart" @touchend="touchend" @hook:mounted="readerMounted" />
+    <component v-if="componentName" ref="readerComponent" :is="componentName" :library-item="selectedLibraryItem" :player-open="!!streamLibraryItem" :keep-progress="keepProgress" :file-id="ebookFileId" @touchstart="touchstart" @touchend="touchend" @read-along="readAlongAvailable = $event" @hook:mounted="readerMounted" />
+
+    <!-- Highlights and notes made in the book or the transcript -->
+    <modals-annotations-modal v-if="readAlongAvailable" v-model="showAnnotations" :library-item-id="selectedLibraryItem.id" :title="abTitle" :author="abAuthor" :chapters="audioChapters" @select="goToAnnotation" />
 
     <!-- TOC side nav -->
     <div v-if="tocOpen" class="w-full h-full overflow-y-scroll absolute inset-0 bg-black/20 z-20" @click.stop.prevent="toggleToC"></div>
@@ -121,6 +127,10 @@
           </div>
           <ui-toggle-btns v-model="readAlongWords" :items="readAlongWordsItems" />
         </div>
+        <div v-if="isEpub && selectedLibraryItem.hasTranscript" class="flex items-center mt-4">
+          <ui-toggle-switch v-model="syncReadingListening" />
+          <p class="text-base pl-3">{{ $strings.LabelSyncReadingListening }}</p>
+        </div>
       </div>
     </modals-modal>
   </div>
@@ -144,6 +154,8 @@ export default {
       searchQuery: '',
       tocOpen: false,
       showSettings: false,
+      showAnnotations: false,
+      readAlongAvailable: false,
       ereaderSettings: {
         theme: 'dark',
         font: 'serif',
@@ -183,6 +195,19 @@ export default {
       set(count) {
         this.$store.dispatch('user/updateUserSettings', { readAlongWords: count })
       }
+    },
+    /** Reading the book with the audio not playing moves the listening position along (user setting) */
+    syncReadingListening: {
+      get() {
+        return this.$store.getters['user/getUserSetting']('syncReadingListening') !== false
+      },
+      set(value) {
+        this.$store.dispatch('user/updateUserSettings', { syncReadingListening: value })
+      }
+    },
+    /** Chapters of the audiobook, to say where highlights are */
+    audioChapters() {
+      return this.selectedLibraryItem?.media?.chapters || []
     },
     readAlongWordsItems() {
       return READ_ALONG_WORD_COUNTS.map((count) => ({ text: count === 1 ? this.$strings.LabelReadAlongHighlightOneWord : this.$getString('LabelReadAlongHighlightWords', [count]), value: count }))
@@ -306,6 +331,10 @@ export default {
     }
   },
   methods: {
+    goToAnnotation(annotation) {
+      this.showAnnotations = false
+      this.$refs.readerComponent?.goToAnnotation?.(annotation)
+    },
     goToChapter(uri) {
       this.toggleToC()
       this.$refs.readerComponent.goToChapter(uri)
@@ -428,6 +457,8 @@ export default {
       this.registerListeners()
     },
     close() {
+      this.readAlongAvailable = false
+      this.showAnnotations = false
       this.unregisterListeners()
       this.isSearching = false
       this.searchQuery = ''

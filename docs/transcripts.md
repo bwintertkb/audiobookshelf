@@ -30,12 +30,16 @@ Nothing has to be installed: the first time, the setup dialog downloads the mode
 - **Re-create**: **Re-create transcript** in the same menu (asks for confirmation) replaces it.
 - **Delete**: **Delete transcript** (users with delete permission).
 - **Read along**: while the book plays, press the transcript button (subtitles icon) in the player. The panel opens on the right (full width on narrow screens) and remembers whether it was open.
-  - The current sentence and words are highlighted at every playback speed (0.5x to 10x): the narrated word with the word before and after it, which is easier to follow than a single word. The highlighter button next to the search button shows how many words are highlighted and switches between 1, 3 and 5; the setting is shared with the ebook reader.
+  - The current sentence and words are highlighted at every playback speed (0.5x to 10x): the narrated word with the word before and after it, which is easier to follow than a single word.
+  - A transcript made from the book's EPUB is laid out like the book: its paragraphs (justified, indented) and headings, in a serif font. **Aa** (text and layout) changes the text size, the font (Sans, Serif or Lexend), the layout (**Book**, or **Sentences**: one sentence per line) and the number of highlighted words (1, 3 or 5, shared with the ebook reader).
   - It scrolls with the audio; scroll yourself to look around and use **Return to current position** to follow the audio again.
   - Click a word to jump to it, or a chapter heading to jump to the chapter.
+  - Right-click a word (long-press on a touch screen) for its definition, or select words with the mouse: a menu offers four highlight colours, a note, **Play from here** and copy. See [Highlights and notes](#highlights-and-notes).
+  - **Open in book** (book icon; transcripts made from the EPUB) opens the ebook reader at the narrated sentence while the audio keeps playing.
   - Search (magnifier icon), with Enter / Shift+Enter for the next / previous result.
-  - Change the text size with the A- / A+ buttons.
   - If the book's audio files changed after the transcript was made (files added, removed or replaced), the panel warns that the highlighting may be out of sync; re-create the transcript.
+- **Sleep timer**: for books with a transcript, a timer that runs out mid-sentence plays on to the end of the sentence (or paragraph) and stops there. Choose **Stop**, **Finish sentence** (default) or **Finish paragraph** in the sleep timer menu; it never plays on for more than 30 s (sentence) or 2 minutes (paragraph).
+- **Media controls**: the browser's media controls (and a phone's lock screen) show the sentence being read in place of the author. **Player settings → Show the sentence being read in the media controls** turns it off.
 
 On an RTX 5090, transcription in the browser runs at about 25–30x real time with 4–8 workers: a 15 hour book takes 30–40 minutes. It is slower when other programs or browser tabs use much of the GPU memory; keep the page visible (browsers slow down hidden tabs). Its words match the transcribe helper's (faster-whisper) for about 97% of the text, with word times within 0.1 s for three quarters of the words.
 
@@ -58,17 +62,30 @@ With a transcript made from the ebook, open the book with **Read** while the aud
 
 - The narrated sentence and words are highlighted in the book itself (3 words by default, the narrated one in the middle and within its sentence; 1, 3 or 5 in the reader's settings under **Read-along highlight**), with the book's formatting (fonts, italics, images, the reader's themes and font settings), at every playback speed. The player stays at the bottom of the screen with its speed control.
 - Pages turn by themselves to follow the narration. Turn a page yourself to look around and use **Return to narration** to follow the audio again.
-- Tap a word to play from there.
+- Click a word to move the audio there.
 - **Play from here** starts the audiobook at the first narrated word of the page you are reading. It shows when the audiobook is not playing, and while it plays when you are on another page than the narration (for example after reading ahead): then it moves the narration to your page.
+- Select words or right-click a word for the definition and highlight menu; highlights and notes show in the book, and the notes button in the reader's top bar lists them (choosing one turns to it without moving the audio).
+- **Reading and listening stay in the same place** (reader settings, on by default): turning pages while the audiobook is not playing moves the listening position to the page, so pressing play continues where you stopped reading (also on another device). Opening the book when you have listened on since you last read it turns to where you stopped listening, with **Back to where you were reading**. Reading ahead while the audiobook plays does not move it.
 
 This uses the [CSS Custom Highlight API](https://developer.mozilla.org/en-US/docs/Web/API/CSS_Custom_Highlight_API) (Chrome/Edge 105+, Safari 17.2+, Firefox 140+); older browsers highlight the sentence only.
+
+## Highlights and notes
+
+Highlight the transcript or the book like on a Kindle:
+
+- **Choose words**: in the web client select words with the mouse, or right-click a word; in the app long-press a word, and keep the finger down and drag to choose more. A single word shows its definition.
+- **Highlight** in yellow, blue, pink or orange; **Note** adds a note (marked with a note icon after the highlight in the transcript). Choosing a highlighted word again opens the highlight to change its colour or note, or delete it.
+- **Notes & highlights** (note icon in the transcript panel and the reader) lists them in book order with their chapter and time: go to one, edit its note, delete it, or **Export** them all as a Markdown file (the app shares the file).
+- Highlights are stored on the server per user, so the web client and the app show the same ones (changes made on another device appear when the book is reopened, or right away while it is open). The app keeps them for reading offline and sends highlights made offline when it is connected again.
+- Definitions come from an offline English dictionary (Princeton WordNet 3.1, about 87,000 words, built into the web client and the app at build time by `client/scripts/buildDictionary.js`; nothing is sent to an online service). Plurals, verb forms and irregular forms (geese, ran, better) find their base word.
 
 ## Android app
 
 The `feature/transcripts` branch of the Audiobookshelf app (`audiobookshelf-app`) shows transcripts too; see `docs/read-along.md` there for building and installing it. It needs a server running this version.
 
 - **Player**: in the full-screen player, the transcript button (next to the chapters button) shows the transcript instead of the cover, with the same highlighting, scrolling, search, text size and tap-to-jump as the web player.
-- **Ebook reader**: with a transcript made from the ebook, **Read** the book while it plays to see the narrated sentence and words highlighted in the book, with the reader's own formatting and settings (**Read-along highlight** in the reader settings, or the highlighter button of the transcript, chooses 1, 3 or 5 words). Pages turn with the narration; swiping turns pages yourself and **Return to narration** follows the audio again. **Long-press** a word to play from there (a tap still shows the reader toolbar). **Play from here** starts the audiobook at the page you are reading, also while it plays after you read ahead of the narration. The speed button in the reader's bottom bar changes the playback speed without leaving the book.
+- **Ebook reader**: with a transcript made from the ebook, **Read** the book while it plays (or **Open in book** in the transcript) to see the narrated sentence and words highlighted in the book, with the reader's own formatting and settings (**Read-along highlight** in the reader settings, or **Aa** in the transcript, chooses 1, 3 or 5 words). Pages turn with the narration; swiping turns pages yourself and **Return to narration** follows the audio again. **Long-press** a word (and drag for more words) for its definition, highlights, notes and **Play from here** (a tap still shows the reader toolbar). **Play from here** at the bottom starts the audiobook at the page you are reading, also while it plays after you read ahead of the narration. The speed button in the reader's bottom bar changes the playback speed without leaving the book. Reading and listening stay in the same place as in the web client, also for downloaded books.
+- **Lock screen and sleep timer**: the lock screen and media notification show the sentence being read (**Settings → Show the sentence being read on the lock screen**), and the sleep timer can finish the sentence or paragraph (tap the option at the bottom of the sleep timer menu). Both work with the screen off.
 - **Offline**: downloading a book also downloads its transcript (and the ebook, as before). For a book downloaded before it had an ebook or transcript, or to update the transcript after re-creating it, choose **Download ebook and transcript** in the book's **⋮** menu: only those files are added to the downloaded book. A downloaded transcript is used even when the server cannot be reached.
 - Creating transcripts is done in the web client (the GPU helper runs on your PC).
 
@@ -82,6 +99,8 @@ The `feature/transcripts` branch of the Audiobookshelf app (`audiobookshelf-app`
 
 ## Storage
 
+Highlights and notes are stored per user at `<metadata>/items/<libraryItemId>/annotations/<userId>.json` (removed with the item, included in backups).
+
 Transcripts are stored gzipped at `<metadata>/items/<libraryItemId>/transcript.json.gz`, next to the item's cover and `metadata.json` (also when "store metadata with item" is enabled, so nothing is written to the media folders). They are deleted together with the library item, and included in backups. A 15 hour book is about 8 MB of JSON, 1.5 MB gzipped. The item record keeps a short summary in `extraData.transcript`, which the API exposes as `hasTranscript` on the expanded item.
 
 ## API
@@ -92,6 +111,9 @@ Transcripts are stored gzipped at `<metadata>/items/<libraryItemId>/transcript.j
 | POST   | `/api/items/:id/transcript` | upload or replace: multipart file field `transcript` (gzipped or plain JSON), or a JSON body (JSON bodies are limited to 10 MB by the server, so use the file upload for long books) |
 | DELETE | `/api/items/:id/transcript` | remove                                                                                                                                                                               |
 | POST   | `/api/items/:id/ebook` | add an ebook file (multipart field `ebook`: epub, pdf, mobi, azw3, cbr, cbz) to the book's folder and scan the book; the first ebook becomes the main one; requires "Can Upload" and "Can Update"; 409 if a file with that name is already there |
+| GET    | `/api/me/item/:id/annotations` | the user's highlights and notes in the book: `{ annotations: [{ id, start, end, text, color, note, createdAt, updatedAt }] }` in book order (`start` / `end`: start times of the first and last transcript word) |
+| PUT    | `/api/me/item/:id/annotations/:annotationId` | create or replace a highlight (the client chooses the id, 8–64 letters, digits, `-` or `_`; `color`: yellow, blue, pink or orange). The copy with the newer `updatedAt` is kept, so changes made offline can be sent later. Emits `annotations_updated` `{ libraryItemId }` to the user's other clients |
+| DELETE | `/api/me/item/:id/annotations/:annotationId` | delete a highlight (404 if it is not there) |
 | GET    | `/api/items/:id/transcript/audio/:fileid?start=<sec>&duration=<sec>` | part of an audio file (by inode) decoded with ffmpeg to raw 16 kHz mono 16-bit PCM (`s16le`), for speech recognition in the browser; at most 900 s per request; requires "Can Update" |
 
 `GET /api/items/:id?expanded=1` includes `"hasTranscript": true|false`. Uploads and deletes emit the `item_updated` socket event. Uploads are validated: `version` must be 1, `libraryItemId` must match the URL, every segment/word time must be a number within the item's playable duration (+1 s), and word start times must not decrease. Limits: 64 MB uploaded, 256 MB after decompression.
