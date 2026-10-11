@@ -23,7 +23,9 @@ export const state = () => ({
     transcriptEngine: 'browser',
     transcriptHelperUrl: 'http://127.0.0.1:8765',
     showTranscriptPanel: false,
-    transcriptFontScale: 1
+    transcriptFontScale: 1,
+    // Read-along: words highlighted around the narrated word (transcript panel and ebook reader)
+    readAlongWords: 3
   }
 })
 

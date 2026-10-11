@@ -115,12 +115,20 @@
           </div>
           <ui-toggle-btns v-model="ereaderSettings.spread" :items="spreadItems" @input="settingsUpdated" />
         </div>
+        <div v-if="isEpub && selectedLibraryItem.hasTranscript" class="flex items-center mt-4">
+          <div class="w-40">
+            <p class="text-lg">{{ $strings.LabelReadAlongHighlight }}:</p>
+          </div>
+          <ui-toggle-btns v-model="readAlongWords" :items="readAlongWordsItems" />
+        </div>
       </div>
     </modals-modal>
   </div>
 </template>
 
 <script>
+import { READ_ALONG_WORD_COUNTS, readAlongWordCount } from '@/players/transcriptUtils'
+
 export default {
   data() {
     return {
@@ -166,6 +174,18 @@ export default {
     ereaderTheme() {
       if (this.isEpub) return this.ereaderSettings.theme
       return 'dark'
+    },
+    /** Words highlighted around the narrated word when reading along (user setting, shared with the transcript panel) */
+    readAlongWords: {
+      get() {
+        return readAlongWordCount(this.$store.getters['user/getUserSetting']('readAlongWords'))
+      },
+      set(count) {
+        this.$store.dispatch('user/updateUserSettings', { readAlongWords: count })
+      }
+    },
+    readAlongWordsItems() {
+      return READ_ALONG_WORD_COUNTS.map((count) => ({ text: count === 1 ? this.$strings.LabelReadAlongHighlightOneWord : this.$getString('LabelReadAlongHighlightWords', [count]), value: count }))
     },
     spreadItems() {
       return [

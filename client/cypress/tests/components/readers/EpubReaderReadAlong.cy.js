@@ -81,22 +81,40 @@ function buildTranscript(allChapters) {
 function highlighted(name) {
   for (const iframe of document.querySelectorAll('#viewer iframe')) {
     const highlight = iframe.contentWindow.CSS?.highlights?.get(name)
-    if (highlight && highlight.size) return [...highlight][0].toString()
+    if (highlight && highlight.size) return [...highlight][0].toString().replace(/\s+/g, ' ')
   }
   return null
+}
+
+/** Text of the words highlighted with narrated word i: `count` words of its sentence, centred on it where the sentence allows */
+function wordGroup(words, i, count = 3) {
+  const sentence = words.filter((w) => w.segment === words[i].segment)
+  const first = words.indexOf(sentence[0])
+  const size = Math.min(count, sentence.length)
+  const start = Math.min(Math.max(i - Math.floor((size - 1) / 2), first), first + sentence.length - size)
+  return words
+    .slice(start, start + size)
+    .map((w) => w.w)
+    .join(' ')
 }
 
 describe('<EpubReader /> read along', () => {
   const allChapters = chapters()
   const transcript = buildTranscript(allChapters)
-  const words = transcript.segments.flatMap((s) => s.words.map((w) => ({ ...w, spine: s.spine })))
+  const words = transcript.segments.flatMap((s, segment) => s.words.map((w) => ({ ...w, spine: s.spine, segment })))
+  const group = (i, count) => wordGroup(words, i, count)
+  const wordsText = (first, last) =>
+    words
+      .slice(first, last + 1)
+      .map((w) => w.w)
+      .join(' ')
   let epub
 
   before(() => {
     cy.wrap(null).then(() => buildEpub(allChapters).then((buffer) => (epub = buffer)))
   })
 
-  function mount({ streaming = true } = {}) {
+  function mount({ streaming = true, settings = Vue.observable({ readAlongWords: null }) } = {}) {
     const clock = { time: words[0].start + 0.05 } // narration has started: first word
     const eventBus = new Vue()
     const events = { seeks: [], plays: [] }
@@ -112,7 +130,7 @@ describe('<EpubReader /> read along', () => {
         $get: (url) => Promise.resolve(url.endsWith('/transcript') ? transcript : epub.slice(0)),
         $patch: () => Promise.resolve()
       },
-      $store: { state, getters: { 'libraries/getLibraryEpubsAllowScriptedContent': false, 'user/getUserMediaProgress': () => null } },
+      $store: { state, getters: { 'libraries/getLibraryEpubsAllowScriptedContent': false, 'user/getUserMediaProgress': () => null, 'user/getUserSetting': (key) => settings[key] ?? null } },
       $eventBus: eventBus,
       $strings: Strings
     }
@@ -138,17 +156,39 @@ describe('<EpubReader /> read along', () => {
     expect(tokenizeDocument(doc).map((t) => t.text)).to.deep.equal(['Chapter', 'One', 'It', 'was', 'a', 'bright,', 'cold', 'day', 'in', 'April,', 'and', 'the', 'clocks', 'were', 'striking.'])
   })
 
-  it('highlights the narrated word and sentence in the book', () => {
+  it('highlights the narrated words and sentence in the book', () => {
     mount().then(({ vm, clock }) => {
-      const target = words.findIndex((w) => w.w.startsWith('children') || w.w.startsWith('garden'))
+      const target = words.findIndex((w, i) => i > 0 && w.segment === words[i - 1].segment && (w.w.startsWith('children') || w.w.startsWith('garden')))
       cy.then(() => {
         clock.time = words[target].start + 0.05
       })
       cy.wrap(null, { timeout: 10000 }).should(() => {
-        expect(highlighted(WORD_HIGHLIGHT)).to.equal(words[target].w)
+        // The narrated word with the words before and after it
+        expect(highlighted(WORD_HIGHLIGHT)).to.equal(`${words[target - 1].w} ${words[target].w} ${words[target + 1].w}`)
         expect(highlighted(SENTENCE_HIGHLIGHT)).to.contain(words[target].w)
         expect(isVisible(vm, target)).to.be.true
       })
+    })
+  })
+
+  it('highlights 1, 3 or 5 words as set, within the sentence', () => {
+    const settings = Vue.observable({ readAlongWords: 1 })
+    mount({ settings }).then(({ clock }) => {
+      const sentenceStart = words.findIndex((w, i) => i > 0 && w.segment !== words[i - 1].segment && w.spine === 0)
+      const middle = sentenceStart + 4
+      cy.then(() => {
+        clock.time = words[middle].start + 0.05
+      })
+      cy.wrap(null, { timeout: 10000 }).should(() => expect(highlighted(WORD_HIGHLIGHT)).to.equal(words[middle].w))
+      cy.then(() => (settings.readAlongWords = 5))
+      cy.wrap(null, { timeout: 10000 }).should(() => expect(highlighted(WORD_HIGHLIGHT)).to.equal(wordsText(middle - 2, middle + 2)))
+      cy.then(() => (settings.readAlongWords = 3))
+      cy.wrap(null, { timeout: 10000 }).should(() => expect(highlighted(WORD_HIGHLIGHT)).to.equal(group(middle)))
+      // The first word of a sentence: it and the next two
+      cy.then(() => {
+        clock.time = words[sentenceStart].start + 0.05
+      })
+      cy.wrap(null, { timeout: 10000 }).should(() => expect(highlighted(WORD_HIGHLIGHT)).to.equal(wordsText(sentenceStart, sentenceStart + 2)))
     })
   })
 
@@ -171,14 +211,14 @@ describe('<EpubReader /> read along', () => {
         clock.time = words[lateInChapterOne].start + 0.05
       })
       cy.wrap(null, { timeout: 15000 }).should(() => {
-        expect(highlighted(WORD_HIGHLIGHT)).to.equal(words[lateInChapterOne].w)
+        expect(highlighted(WORD_HIGHLIGHT)).to.equal(group(lateInChapterOne))
         expect(isVisible(vm, lateInChapterOne), 'late word visible').to.be.true
       })
       cy.then(() => {
         clock.time = words[inChapterTwo].start + 0.05
       })
       cy.wrap(null, { timeout: 15000 }).should(() => {
-        expect(highlighted(WORD_HIGHLIGHT)).to.equal(words[inChapterTwo].w)
+        expect(highlighted(WORD_HIGHLIGHT)).to.equal(group(inChapterTwo))
         expect(isVisible(vm, inChapterTwo), 'chapter two word visible').to.be.true
       })
     })
@@ -186,7 +226,7 @@ describe('<EpubReader /> read along', () => {
 
   it('seeks the audio when a word is tapped', () => {
     mount().then(({ vm, clock, events }) => {
-      cy.wrap(null, { timeout: 10000 }).should(() => expect(highlighted(WORD_HIGHLIGHT)).to.equal(words[0].w))
+      cy.wrap(null, { timeout: 10000 }).should(() => expect(highlighted(WORD_HIGHLIGHT)).to.equal(group(0)))
       cy.then(() => {
         const target = 25
         const { entry, range } = vm.readAlong.wordRange(target)
@@ -201,7 +241,7 @@ describe('<EpubReader /> read along', () => {
 
   it('stops following on manual page turns until asked to return', () => {
     mount().then(({ vm, clock }) => {
-      cy.wrap(null, { timeout: 10000 }).should(() => expect(highlighted(WORD_HIGHLIGHT)).to.equal(words[0].w))
+      cy.wrap(null, { timeout: 10000 }).should(() => expect(highlighted(WORD_HIGHLIGHT)).to.equal(group(0)))
       cy.then(() => vm.next())
       cy.contains('button', Strings.ButtonReturnToNarration).should('be.visible')
       cy.then(() => {
@@ -249,7 +289,7 @@ describe('<EpubReader /> read along', () => {
           clearInterval(timer)
           await new Promise((resolve) => setTimeout(resolve, 150)) // let the last page turn finish
           const active = readAlong.activeWord
-          if (highlighted(WORD_HIGHLIGHT) !== words[active]?.w) failures.push(`rate ${rate}: highlighted "${highlighted(WORD_HIGHLIGHT)}" but narrating "${words[active]?.w}"`)
+          if (highlighted(WORD_HIGHLIGHT) !== group(active)) failures.push(`rate ${rate}: highlighted "${highlighted(WORD_HIGHLIGHT)}" but narrating "${words[active]?.w}" (expected "${group(active)}")`)
           else if (!isVisible(vm, active)) failures.push(`rate ${rate}: narrated word ${active} is not on the page`)
         }
       }
@@ -281,7 +321,7 @@ describe('<EpubReader /> read along', () => {
 
   it('moves the narration to the page being read when reading ahead of the audio', () => {
     mount().then(({ vm, events }) => {
-      cy.wrap(null, { timeout: 10000 }).should(() => expect(highlighted(WORD_HIGHLIGHT)).to.equal(words[0].w))
+      cy.wrap(null, { timeout: 10000 }).should(() => expect(highlighted(WORD_HIGHLIGHT)).to.equal(group(0)))
       cy.then(() => vm.next())
       cy.wait(400)
       cy.then(() => vm.next())

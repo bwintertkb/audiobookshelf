@@ -22,6 +22,7 @@
 <script>
 import ePub from 'epubjs'
 import ReadAlong from '@/players/ReadAlong'
+import { readAlongWordCount } from '@/players/transcriptUtils'
 
 const READ_ALONG_PLAYING_POLL_MS = 50
 const READ_ALONG_PAUSED_POLL_MS = 250
@@ -71,6 +72,9 @@ export default {
     },
     isPlaying() {
       this.startReadAlongLoop()
+    },
+    readAlongWords(count) {
+      this.readAlong?.setHighlightWords(count)
     }
   },
   computed: {
@@ -83,6 +87,11 @@ export default {
     },
     isPlaying() {
       return this.$store.state.streamIsPlaying
+    },
+    /** Words highlighted around the narrated word (user setting, shared with the transcript panel) */
+    readAlongWords() {
+      const getUserSetting = this.$store.getters['user/getUserSetting']
+      return readAlongWordCount(getUserSetting ? getUserSetting('readAlongWords') : null)
     },
     allowScriptedContent() {
       return this.$store.getters['libraries/getLibraryEpubsAllowScriptedContent']
@@ -197,6 +206,7 @@ export default {
       this.readAlong = new ReadAlong({
         rendition: this.rendition,
         transcript,
+        highlightWords: this.readAlongWords,
         onSeek: (time) => this.$eventBus.$emit('playback-seek', time),
         onFollowChanged: (following) => {
           this.readAlongFollowing = following

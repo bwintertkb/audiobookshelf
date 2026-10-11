@@ -89,6 +89,34 @@ export function findPosition(index, time) {
   return { word: -1, segment: findLastLessOrEqual(index.segmentStarts, time + WORD_LOOKAHEAD_SEC) }
 }
 
+/** Number of words the read-along highlight can cover (user setting readAlongWords) */
+export const READ_ALONG_WORD_COUNTS = [1, 3, 5]
+export const DEFAULT_READ_ALONG_WORDS = 3
+
+/** @returns {number} a valid number of highlighted words for a stored setting */
+export function readAlongWordCount(value) {
+  return READ_ALONG_WORD_COUNTS.includes(Number(value)) ? Number(value) : DEFAULT_READ_ALONG_WORDS
+}
+
+/**
+ * Words highlighted together with the narrated word: `count` words of its segment (sentence), centred on it
+ * where the segment allows. The highlight moves on one word at a time and is easier to follow than a single word.
+ *
+ * @param {ReturnType<typeof buildTranscriptIndex>} index
+ * @param {number} word - the narrated word, -1 for none
+ * @param {number} count
+ * @returns {{first: number, last: number}} first and last word index (inclusive), -1 if there is no narrated word
+ */
+export function highlightedWords(index, word, count) {
+  if (word < 0 || word >= index.numWords) return { first: -1, last: -1 }
+  const segment = index.wordSegment[word]
+  const segmentFirst = index.segmentFirstWord[segment]
+  const segmentLast = segmentFirst + index.segments[segment].words.length - 1
+  const size = Math.max(1, Math.min(Math.round(count) || 1, segmentLast - segmentFirst + 1))
+  const first = Math.max(segmentFirst, Math.min(word - Math.floor((size - 1) / 2), segmentLast - size + 1))
+  return { first, last: first + size - 1 }
+}
+
 function normalizeSearchText(text) {
   return text.toLowerCase().replace(/\s+/g, ' ').trim()
 }

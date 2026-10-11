@@ -1,6 +1,6 @@
 # Read-along transcripts
 
-Create a word-level transcript of an audiobook on your own GPU, store it on the Audiobookshelf server, and follow along in the web player: the current word and sentence are highlighted, the text scrolls with the audio, and clicking a word jumps there.
+Create a word-level transcript of an audiobook on your own GPU, store it on the Audiobookshelf server, and follow along in the web player: the current words and sentence are highlighted, the text scrolls with the audio, and clicking a word jumps there.
 
 ```
  Browser (ABS web client on your PC)                                    ABS server
@@ -30,7 +30,7 @@ Nothing has to be installed: the first time, the setup dialog downloads the mode
 - **Re-create**: **Re-create transcript** in the same menu (asks for confirmation) replaces it.
 - **Delete**: **Delete transcript** (users with delete permission).
 - **Read along**: while the book plays, press the transcript button (subtitles icon) in the player. The panel opens on the right (full width on narrow screens) and remembers whether it was open.
-  - The current sentence and word are highlighted at every playback speed (0.5x to 10x).
+  - The current sentence and words are highlighted at every playback speed (0.5x to 10x): the narrated word with the word before and after it, which is easier to follow than a single word. The highlighter button next to the search button shows how many words are highlighted and switches between 1, 3 and 5; the setting is shared with the ebook reader.
   - It scrolls with the audio; scroll yourself to look around and use **Return to current position** to follow the audio again.
   - Click a word to jump to it, or a chapter heading to jump to the chapter.
   - Search (magnifier icon), with Enter / Shift+Enter for the next / previous result.
@@ -56,7 +56,7 @@ If the book also has an EPUB in ABS, choose **Create transcript from ebook** in 
 
 With a transcript made from the ebook, open the book with **Read** while the audiobook plays:
 
-- The narrated sentence and word are highlighted in the book itself, with the book's formatting (fonts, italics, images, the reader's themes and font settings), at every playback speed. The player stays at the bottom of the screen with its speed control.
+- The narrated sentence and words are highlighted in the book itself (3 words by default, the narrated one in the middle and within its sentence; 1, 3 or 5 in the reader's settings under **Read-along highlight**), with the book's formatting (fonts, italics, images, the reader's themes and font settings), at every playback speed. The player stays at the bottom of the screen with its speed control.
 - Pages turn by themselves to follow the narration. Turn a page yourself to look around and use **Return to narration** to follow the audio again.
 - Tap a word to play from there.
 - **Play from here** starts the audiobook at the first narrated word of the page you are reading. It shows when the audiobook is not playing, and while it plays when you are on another page than the narration (for example after reading ahead): then it moves the narration to your page.
@@ -68,7 +68,7 @@ This uses the [CSS Custom Highlight API](https://developer.mozilla.org/en-US/doc
 The `feature/transcripts` branch of the Audiobookshelf app (`audiobookshelf-app`) shows transcripts too; see `docs/read-along.md` there for building and installing it. It needs a server running this version.
 
 - **Player**: in the full-screen player, the transcript button (next to the chapters button) shows the transcript instead of the cover, with the same highlighting, scrolling, search, text size and tap-to-jump as the web player.
-- **Ebook reader**: with a transcript made from the ebook, **Read** the book while it plays to see the narrated sentence and word highlighted in the book, with the reader's own formatting and settings. Pages turn with the narration; swiping turns pages yourself and **Return to narration** follows the audio again. **Long-press** a word to play from there (a tap still shows the reader toolbar). **Play from here** starts the audiobook at the page you are reading, also while it plays after you read ahead of the narration. The speed button in the reader's bottom bar changes the playback speed without leaving the book.
+- **Ebook reader**: with a transcript made from the ebook, **Read** the book while it plays to see the narrated sentence and words highlighted in the book, with the reader's own formatting and settings (**Read-along highlight** in the reader settings, or the highlighter button of the transcript, chooses 1, 3 or 5 words). Pages turn with the narration; swiping turns pages yourself and **Return to narration** follows the audio again. **Long-press** a word to play from there (a tap still shows the reader toolbar). **Play from here** starts the audiobook at the page you are reading, also while it plays after you read ahead of the narration. The speed button in the reader's bottom bar changes the playback speed without leaving the book.
 - **Offline**: downloading a book also downloads its transcript (and the ebook, as before). For a book downloaded before it had an ebook or transcript, or to update the transcript after re-creating it, choose **Download ebook and transcript** in the book's **⋮** menu: only those files are added to the downloaded book. A downloaded transcript is used even when the server cannot be reached.
 - Creating transcripts is done in the web client (the GPU helper runs on your PC).
 

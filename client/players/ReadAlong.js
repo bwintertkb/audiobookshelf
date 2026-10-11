@@ -1,7 +1,7 @@
-import { buildTranscriptIndex, findPosition } from './transcriptUtils'
+import { DEFAULT_READ_ALONG_WORDS, buildTranscriptIndex, findPosition, highlightedWords } from './transcriptUtils'
 
 /**
- * Read-along in the EPUB reader: highlights the narrated word and sentence of an ebook transcript
+ * Read-along in the EPUB reader: highlights the narrated words and sentence of an ebook transcript
  * (source "ebook", segments carry their EPUB spine position) in the rendered book, follows the
  * narration from page to page and maps clicks on words back to audio times.
  *
@@ -92,12 +92,14 @@ export default class ReadAlong {
    * @param {Object} options
    * @param {import('epubjs').Rendition} options.rendition
    * @param {Object} options.transcript - v1 transcript with source "ebook"
+   * @param {number} [options.highlightWords] - words highlighted around the narrated one (1, 3 or 5)
    * @param {(time: number) => void} [options.onSeek] - a word was clicked
    * @param {() => void} [options.onFollowChanged] - following was paused or resumed
    */
-  constructor({ rendition, transcript, onSeek, onFollowChanged }) {
+  constructor({ rendition, transcript, highlightWords = DEFAULT_READ_ALONG_WORDS, onSeek, onFollowChanged }) {
     this.rendition = rendition
     this.transcript = transcript
+    this.highlightWords = highlightWords
     this.onSeek = onSeek
     this.onFollowChanged = onFollowChanged
     this.index = buildTranscriptIndex(transcript)
@@ -263,6 +265,13 @@ export default class ReadAlong {
     if (this.following && this.followPending) this.follow()
   }
 
+  /** Number of words highlighted around the narrated word */
+  setHighlightWords(count) {
+    if (count === this.highlightWords) return
+    this.highlightWords = count
+    this.dirty = true
+  }
+
   highlight() {
     const located = this.wordRange(this.activeWord)
     if (this.highlightWindow && this.highlightWindow !== located?.entry?.window) this.clearHighlights(this.highlightWindow)
@@ -278,7 +287,7 @@ export default class ReadAlong {
     sentence.setEnd(last.endContainer, last.endOffset)
 
     if (win?.CSS?.highlights && win.Highlight) {
-      win.CSS.highlights.set(WORD_HIGHLIGHT, new win.Highlight(range))
+      win.CSS.highlights.set(WORD_HIGHLIGHT, new win.Highlight(this.wordGroupRange(entry, range)))
       win.CSS.highlights.set(SENTENCE_HIGHLIGHT, new win.Highlight(sentence))
       this.highlightWindow = win
     } else {
@@ -290,6 +299,18 @@ export default class ReadAlong {
         this.annotationCfi = cfi
       }
     }
+  }
+
+  /** The narrated word with the words highlighted around it (one range, so the spaces between them are highlighted too) */
+  wordGroupRange(entry, range) {
+    const { first, last } = highlightedWords(this.index, this.activeWord, this.highlightWords)
+    if (first === last) return range
+    const start = entry.ranges[first - entry.firstWord] || range
+    const end = entry.ranges[last - entry.firstWord] || range
+    const group = entry.doc.createRange()
+    group.setStart(start.startContainer, start.startOffset)
+    group.setEnd(end.endContainer, end.endOffset)
+    return group
   }
 
   clearHighlights(win) {

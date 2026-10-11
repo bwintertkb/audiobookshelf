@@ -8,6 +8,11 @@
       <ui-tooltip :text="$strings.ButtonSearch" direction="bottom">
         <button class="transcript-icon-btn" :class="showSearch ? 'text-white' : ''" :aria-label="$strings.ButtonSearch" @click="toggleSearch"><span class="material-symbols text-xl">search</span></button>
       </ui-tooltip>
+      <ui-tooltip :text="readAlongWordsLabel" direction="bottom">
+        <button class="transcript-icon-btn" :aria-label="readAlongWordsLabel" @click="nextReadAlongWords">
+          <span class="material-symbols text-xl">ink_highlighter</span><span class="text-xs font-semibold">{{ readAlongWords }}</span>
+        </button>
+      </ui-tooltip>
       <ui-tooltip :text="$strings.LabelFontScale" direction="bottom">
         <div class="flex items-center">
           <button class="transcript-icon-btn" :disabled="fontScale <= minFontScale" :aria-label="$strings.LabelFontScale + ' -'" @click="changeFontScale(-0.125)"><span class="material-symbols text-xl">text_decrease</span></button>
@@ -45,7 +50,7 @@
 
       <div v-show="!loading && !error" ref="scroller" class="transcript-scroller absolute inset-0 overflow-y-auto overflow-x-hidden outline-hidden" tabindex="0" @scroll.passive="onScroll" @wheel.passive="stopAutoScroll" @touchstart.passive="stopAutoScroll" @mousedown="onScrollerMousedown" @keydown="onScrollerKeydown" @click="onClick">
         <div class="relative" :style="{ height: totalHeight + 'px' }">
-          <div ref="window" class="absolute left-0 right-0 top-0 px-4" :style="{ transform: `translateY(${windowTop}px)`, fontSize: fontSizePx + 'px' }">
+          <div ref="window" class="absolute left-0 right-0 top-0 px-4" :class="{ 'transcript-highlight-api': highlightApi }" :style="{ transform: `translateY(${windowTop}px)`, fontSize: fontSizePx + 'px' }">
             <div v-for="row in visibleRows" :key="row.key" :data-row="row.index" class="transcript-row" :class="{ 'transcript-row-paragraph': row.paragraph }">
               <h3 v-if="row.type === 'chapter'" class="transcript-chapter" :data-chapter-start="row.start">{{ row.title }}</h3>
               <p v-else class="transcript-segment" :class="{ 'transcript-search-current': row.segment === currentSearchSegment, 'transcript-segment-heading': row.heading }" :data-seg="row.segment">
@@ -65,7 +70,7 @@
 </template>
 
 <script>
-import { buildTranscriptIndex, findLastLessOrEqual, findPosition, getTranscriptAudioMismatch, searchTranscript } from '@/players/transcriptUtils'
+import { READ_ALONG_WORD_COUNTS, buildTranscriptIndex, findLastLessOrEqual, findPosition, getTranscriptAudioMismatch, highlightedWords, readAlongWordCount, searchTranscript } from '@/players/transcriptUtils'
 
 const OVERSCAN_PX = 600
 const BASE_FONT_SIZE = 16
@@ -74,6 +79,8 @@ const AVG_CHAR_WIDTH_EM = 0.48
 const ROW_PADDING_PX = 10
 const PAUSED_POLL_MS = 250
 const PLAYING_POLL_MS = 50
+/** CSS Custom Highlight of the words highlighted with the narrated one (styled in the unscoped style below) */
+const WORDS_HIGHLIGHT = 'abs-transcript-words'
 
 export default {
   props: {
@@ -109,7 +116,9 @@ export default {
       searchPosition: -1,
       fontScale: 1,
       minFontScale: 0.75,
-      maxFontScale: 2
+      maxFontScale: 2,
+      // The highlighted words are one highlight, spaces included; without the API each word is highlighted
+      highlightApi: !!(window.CSS?.highlights && window.Highlight)
     }
   },
   watch: {
@@ -129,11 +138,22 @@ export default {
     searchQuery() {
       clearTimeout(this.searchTimeout)
       this.searchTimeout = setTimeout(this.runSearch, 250)
+    },
+    readAlongWords() {
+      this.applyHighlight()
     }
   },
   computed: {
     fontSizePx() {
       return Math.round(BASE_FONT_SIZE * this.fontScale)
+    },
+    /** Words highlighted around the narrated word (user setting, shared with the ebook reader) */
+    readAlongWords() {
+      return readAlongWordCount(this.$store.getters['user/getUserSetting']('readAlongWords'))
+    },
+    readAlongWordsLabel() {
+      const words = this.readAlongWords === 1 ? this.$strings.LabelReadAlongHighlightOneWord : this.$getString('LabelReadAlongHighlightWords', [this.readAlongWords])
+      return `${this.$strings.LabelReadAlongHighlight}: ${words}`
     },
     normalizedQuery() {
       return this.searchQuery.trim().toLowerCase()
@@ -206,6 +226,7 @@ export default {
       this.activeSegment = -1
       this.activeWordEl = null
       this.activeSegmentEl = null
+      this.groupEls = []
       this.audioMismatch = false
       this.searchResults = []
       this.searchPosition = -1
@@ -383,11 +404,36 @@ export default {
       if (this.activeWordEl && this.activeWordEl !== wordEl) this.activeWordEl.classList.remove('transcript-word-active')
       if (wordEl) wordEl.classList.add('transcript-word-active')
       this.activeWordEl = wordEl
+      this.applyWordGroup(container)
 
       const segmentEl = this.activeSegment >= 0 ? container.querySelector(`[data-seg="${this.activeSegment}"]`) : null
       if (this.activeSegmentEl && this.activeSegmentEl !== segmentEl) this.activeSegmentEl.classList.remove('transcript-segment-active')
       if (segmentEl) segmentEl.classList.add('transcript-segment-active')
       this.activeSegmentEl = segmentEl
+    },
+    /** Highlight the words around the narrated one too (READ_ALONG_WORD_COUNTS) */
+    applyWordGroup(container) {
+      const { first, last } = highlightedWords(this.index, this.activeWord, this.readAlongWords)
+      const elements = []
+      for (let i = first; i >= 0 && i <= last; i++) {
+        const el = container.querySelector(`[data-wi="${i}"]`)
+        if (el) elements.push(el)
+      }
+      if (this.highlightApi) {
+        if (!elements.length) return CSS.highlights.delete(WORDS_HIGHLIGHT)
+        const range = document.createRange()
+        range.setStartBefore(elements[0])
+        range.setEndAfter(elements[elements.length - 1])
+        CSS.highlights.set(WORDS_HIGHLIGHT, new Highlight(range))
+        return
+      }
+      for (const el of this.groupEls) if (!elements.includes(el)) el.classList.remove('transcript-word-group')
+      for (const el of elements) el.classList.add('transcript-word-group')
+      this.groupEls = elements
+    },
+    nextReadAlongWords() {
+      const next = READ_ALONG_WORD_COUNTS[(READ_ALONG_WORD_COUNTS.indexOf(this.readAlongWords) + 1) % READ_ALONG_WORD_COUNTS.length]
+      this.$store.dispatch('user/updateUserSettings', { readAlongWords: next })
     },
     /** Keep the current word (or its segment while not rendered yet) in view */
     followCurrent(force = false) {
@@ -497,6 +543,7 @@ export default {
     this.activeSegment = -1
     this.activeWordEl = null
     this.activeSegmentEl = null
+    this.groupEls = []
     this.lastTime = null
     this.contentWidth = 400
   },
@@ -516,6 +563,7 @@ export default {
     this.startSyncLoop()
   },
   beforeDestroy() {
+    if (this.highlightApi) CSS.highlights.delete(WORDS_HIGHLIGHT)
     this.stopSyncLoop()
     clearTimeout(this.searchTimeout)
     if (this.scrollFrame) cancelAnimationFrame(this.scrollFrame)
@@ -583,15 +631,28 @@ export default {
 .transcript-word:hover {
   text-decoration: underline;
 }
-.transcript-word-active {
+.transcript-word-active,
+.transcript-word-group {
   background-color: rgb(250 204 21 / 0.3);
   color: white;
   box-shadow: 0 0 0 2px rgb(250 204 21 / 0.3);
+}
+/* The narrated word is part of the highlighted words (::highlight below) */
+.transcript-highlight-api .transcript-word-active {
+  background-color: transparent;
+  box-shadow: none;
 }
 .transcript-search-hit {
   background-color: rgb(33 150 243 / 0.35);
 }
 .transcript-search-current {
   background-color: rgb(255 255 255 / 0.05);
+}
+</style>
+
+<style>
+::highlight(abs-transcript-words) {
+  background-color: rgb(250 204 21 / 0.3);
+  color: white;
 }
 </style>

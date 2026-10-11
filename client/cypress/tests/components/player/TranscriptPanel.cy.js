@@ -1,3 +1,4 @@
+import Vue from 'vue'
 import TranscriptPanel from '@/components/player/TranscriptPanel.vue'
 import Tooltip from '@/components/ui/Tooltip.vue'
 import LoadingSpinner from '@/components/widgets/LoadingSpinner.vue'
@@ -67,7 +68,7 @@ function getBook(id) {
   return books[id]
 }
 
-function mountPanel({ libraryItemId = 'book-1', time = 0, playing = true, libraryItem = null } = {}) {
+function mountPanel({ libraryItemId = 'book-1', time = 0, playing = true, libraryItem = null, readAlongWords = null } = {}) {
   const book = getBook(libraryItemId)
   const clock = { time, getCurrentTime: null }
   clock.getCurrentTime = () => (typeof clock.time === 'function' ? clock.time() : clock.time)
@@ -78,12 +79,15 @@ function mountPanel({ libraryItemId = 'book-1', time = 0, playing = true, librar
   const mocks = {
     $axios: { $get: axiosGet },
     $store: {
-      getters: { 'user/getUserSetting': (key) => (key === 'transcriptFontScale' ? 1 : null) },
-      dispatch: cy.stub()
+      getters: { 'user/getUserSetting': (key) => settings[key] ?? null },
+      dispatch: cy.stub().callsFake((action, payload) => {
+        if (action === 'user/updateUserSettings') Object.assign(settings, payload)
+      })
     },
     $strings: Strings,
     $getString: (key, subs = []) => Strings[key].replace(/\{(\d+)\}/g, (match, n) => subs[n])
   }
+  const settings = Vue.observable({ transcriptFontScale: 1, readAlongWords })
   const stubs = { 'ui-tooltip': Tooltip, 'widgets-loading-spinner': LoadingSpinner }
   const propsData = { libraryItem: libraryItem || book.libraryItem, chapters: book.chapters, getCurrentTime: () => clock.getCurrentTime(), playing }
   return cy.mount(TranscriptPanel, { propsData, mocks, stubs }).then(({ wrapper }) => {
@@ -106,6 +110,45 @@ describe('<TranscriptPanel />', () => {
       cy.get('#transcript-panel h3').first().should('have.text', 'Chapter 1')
       cy.get('[data-wi="0"]').should('have.class', 'transcript-word-active')
       cy.get('[data-seg="0"]').should('have.class', 'transcript-segment-active')
+    })
+  })
+
+  it('highlights the narrated word with the words around it in its sentence (1, 3 or 5 words)', () => {
+    // Word 20 is the 7th of the second segment (words 14 to 27)
+    mountPanel({ time: wordStart(20) + 0.05, playing: false }).then(({ vm, clock, book }) => {
+      const allWords = book.transcript.segments.flatMap((s) => s.words.map((w) => w.w))
+      const text = (first, last) => allWords.slice(first, last + 1).join(' ')
+      const highlightedText = () => {
+        if (!vm.highlightApi) return [...vm.$refs.window.querySelectorAll('.transcript-word-group')].map((el) => el.textContent).join(' ')
+        const highlight = CSS.highlights.get('abs-transcript-words')
+        return highlight && highlight.size ? [...highlight][0].toString() : ''
+      }
+      const button = `button[aria-label^="${Strings.LabelReadAlongHighlight}"]`
+      expect(vm.highlightApi, 'CSS Custom Highlight API').to.be.true
+      cy.get('.transcript-word-active').should('have.attr', 'data-wi', '20')
+      cy.wrap(null).should(() => expect(highlightedText()).to.equal(text(19, 21)))
+      cy.get(button).should('have.attr', 'aria-label', `${Strings.LabelReadAlongHighlight}: 3 words`).click()
+      cy.wrap(null).should(() => expect(highlightedText()).to.equal(text(18, 22)))
+      cy.get(button).click()
+      cy.wrap(null).should(() => expect(highlightedText()).to.equal(text(20, 20)))
+      cy.get(button).click()
+      cy.wrap(null).should(() => expect(highlightedText()).to.equal(text(19, 21)))
+      cy.get('.transcript-word-active').should('have.length', 1)
+
+      // At the start and end of a sentence the highlight stays in the sentence
+      cy.then(() => (clock.time = wordStart(14) + 0.05))
+      cy.wrap(null).should(() => expect(highlightedText()).to.equal(text(14, 16)))
+      cy.then(() => (clock.time = wordStart(27) + 0.05))
+      cy.wrap(null).should(() => expect(highlightedText()).to.equal(text(25, 27)))
+
+      // Browsers without the highlight API: the words are highlighted one by one
+      cy.then(() => {
+        CSS.highlights.delete('abs-transcript-words')
+        vm.highlightApi = false
+        vm.applyHighlight()
+      })
+      cy.get('.transcript-word-group').should('have.length', 3)
+      cy.wrap(null).should(() => expect(highlightedText()).to.equal(text(25, 27)))
     })
   })
 
