@@ -45,7 +45,7 @@ The Python helper in [`tools/transcribe-helper`](../tools/transcribe-helper/READ
 
 ## Use the book's own text (EPUB)
 
-If the book also has an EPUB in ABS, choose **Create transcript from ebook** in the **⋮** menu. To add one, choose **Upload ebook** in the same menu and pick the `.epub` on your computer (users who can upload and edit; it is saved in the book's folder and the book page then shows **Read**), or put the file in the book's folder yourself. The words are still timed with Whisper on your GPU, then the EPUB's text is lined up with the narration:
+If the book also has an EPUB in ABS, choose **Create transcript from ebook** in the **⋮** menu. To add one, choose **Upload ebook** in the same menu and pick the `.epub` on your computer (users who can upload and edit; it is saved in the book's folder and the book page then shows **Read**), or put the file in the book's folder yourself. The [transcriber app](../tools/transcribe-helper/README.md#transcriber-app-windows) does both in one step: **Add EPUB…** uploads the EPUB to the book and queues its transcript from the ebook. The words are still timed with Whisper on your GPU, then the EPUB's text is lined up with the narration:
 
 - The transcript shows the book's real text: spelling, punctuation, quotes, paragraphs and chapter headings.
 - Text that is not read aloud (title pages, contents, copyright and license pages, captions, footnotes) is left out; speech that is not in the book (narrator intros, "Chapter two of …" announcements) simply has no text.

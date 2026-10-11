@@ -6,12 +6,16 @@ chosen ones on this computer's GPU one at a time (JobManager) and upload each tr
 - A finished transcript is kept in cache/pending-uploads until the server accepted it, so a failed upload can be
   retried (also after restarting the app) without transcribing again.
 - The password and tokens stay in memory (AbsClient); they are never logged or written to disk.
+- An EPUB from this computer can be added to a book that has none (add_ebook): it is uploaded to the book's
+  folder on the server, becomes its main ebook, and the book is queued for a transcript in ebook mode, so the
+  ebook reader can highlight the narration in it.
 """
 
 import gzip
 import json
 import logging
 import os
+import re
 import shutil
 import threading
 import time
@@ -20,7 +24,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .abs_client import AbsClient, AbsError, Book
-from .jobs import JobError, JobManager, _safe_name
+from .ebook import EbookError, read_epub
+from .jobs import MAX_EBOOK_BYTES, JobError, JobManager, _safe_name
 from .languages import whisper_language_code
 
 logger = logging.getLogger(__name__)
@@ -39,6 +44,15 @@ CANCELLED = "cancelled"
 ACTIVE = (WAITING, PREPARING, DOWNLOADING, QUEUED, TRANSCRIBING, ALIGNING, UPLOADING)
 AHEAD = (PREPARING, DOWNLOADING, QUEUED)  # tasks waiting for the GPU with their audio (being) downloaded
 FINISHED = (DONE, ERROR, UPLOAD_FAILED, CANCELLED)
+TITLE_FILLER_WORDS = {"a", "an", "and", "the", "of", "book", "novel", "edition", "unabridged"}
+
+
+def titles_match(book_title, ebook_title):
+    """True if an EPUB's title looks like the book's: most words of the shorter title are in the other one"""
+    book_words, ebook_words = (set(re.findall(r"\w+", (title or "").lower())) - TITLE_FILLER_WORDS for title in (book_title, ebook_title))
+    if not book_words or not ebook_words:
+        return True  # nothing to compare
+    return len(book_words & ebook_words) >= 0.5 * min(len(book_words), len(ebook_words))
 
 
 @dataclass
@@ -195,6 +209,60 @@ class TranscriberController:
         with self._lock:
             self.tasks = [t for t in self.tasks if t.status not in (DONE, CANCELLED)]
 
+    # ------------------------------------------------------------------ ebooks
+    def inspect_ebook(self, book, path):
+        """Read an EPUB on this computer before adding it to a book. Raises AbsError if it cannot be used.
+        Returns {"title", "words", "titleMatches"}."""
+        path = Path(path)
+        if path.suffix.lower() != ".epub":
+            raise AbsError(f"{path.name} is not an EPUB file")
+        try:
+            size = path.stat().st_size
+        except OSError as error:
+            raise AbsError(f"Could not open {path.name}: {error}") from None
+        if size > MAX_EBOOK_BYTES:
+            raise AbsError(f"{path.name} is too large ({size / 1e6:,.0f} MB)")
+        try:
+            ebook = read_epub(str(path))
+        except EbookError as error:
+            raise AbsError(f"{path.name} cannot be used: {error}") from None
+        words = sum(len(paragraph["text"].split()) for paragraph in ebook["paragraphs"])
+        if not words:
+            raise AbsError(f"{path.name} has no text to read along with")
+        title = ebook.get("title") or ""
+        return {"title": title, "words": words, "titleMatches": titles_match(book.title, title)}
+
+    def add_ebook(self, book, path, transcribe=True, language="book"):
+        """Upload an EPUB from this computer to a book that has none; it becomes the book's main ebook (an ebook
+        in another format stays as a supplementary one). Then queue the book for a transcript in ebook mode.
+        Returns the new task (None if transcribe is False)."""
+        client = self._require_client()
+        if not client.can_add_ebooks:
+            raise AbsError(f"'{client.user.get('username')}' may not upload files, so ebooks cannot be added. Sign in as an admin or a user who can upload and update items.")
+        if transcribe and any(t.book.id == book.id and t.status in ACTIVE for t in self.tasks):
+            raise AbsError(f"'{book.title}' is in the transcription queue. Add the EPUB when it has finished, or cancel it first.")
+        item = client.item(book.id)
+        main_ebook = (item.get("media") or {}).get("ebookFile") or {}
+        if (main_ebook.get("ebookFormat") or "").lower() == "epub":
+            raise AbsError(f"'{book.title}' already has an EPUB ({(main_ebook.get('metadata') or {}).get('filename') or 'epub'})")
+        files_before = {f.get("ino") for f in item.get("libraryFiles") or []}
+
+        name = Path(path).name
+        self.note(f"Uploading '{name}' to '{book.title}'")
+        updated = client.upload_ebook(book.id, str(path))
+        if ((updated.get("media") or {}).get("ebookFile") or {}).get("ebookFormat", "").lower() != "epub":
+            # The book had an ebook in another format (e.g. a PDF): the uploaded EPUB is a supplementary file
+            added = next((f for f in updated.get("libraryFiles") or [] if f.get("ino") not in files_before and ((f.get("metadata") or {}).get("ext") or "").lower() == ".epub"), None)
+            if not added:
+                raise AbsError(f"The server did not add '{name}' as an ebook of '{book.title}'")
+            client.set_primary_ebook(book.id, added["ino"])
+            if main_ebook.get("ebookFormat"):
+                self.note(f"'{name}' is now the main ebook of '{book.title}'; its {main_ebook['ebookFormat'].upper()} stays as a supplementary ebook")
+        book.ebook_format = "epub"
+        book.raw.setdefault("media", {})["ebookFormat"] = "epub"
+        self.note(f"Added '{name}' to '{book.title}'")
+        return self.add(book, use_ebook=True, language=language) if transcribe else None
+
     # ------------------------------------------------------------------ worker
     def _run(self):
         while not self._stop.is_set():
@@ -253,7 +321,10 @@ class TranscriberController:
                 job, existing = self.manager.submit(request)
                 task.job = job
                 task.status = DOWNLOADING
-            self.note(f"Downloading the audio of '{task.book.title}' ({len(files)} file{'s' if len(files) != 1 else ''})")
+            if request.get("baseTranscriptUrl"):
+                self.note(f"Lining up the EPUB of '{task.book.title}' with its transcript (its audio is only downloaded if the transcript was made from other audio files)")
+            else:
+                self.note(f"Downloading the audio of '{task.book.title}' ({len(files)} file{'s' if len(files) != 1 else ''})")
         except (AbsError, JobError) as error:
             self._fail(task, str(error))
 

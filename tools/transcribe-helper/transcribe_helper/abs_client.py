@@ -1,10 +1,11 @@
-"""Audiobookshelf API client for the transcriber app: sign in, list books, upload transcripts.
+"""Audiobookshelf API client for the transcriber app: sign in, list books, upload transcripts and ebooks.
 
 The password, access token and refresh token are kept in memory only; they are never logged or written to disk.
 """
 
 import gzip
 import json
+import os
 import time
 import urllib.error
 import urllib.parse
@@ -18,6 +19,7 @@ from .jobs import JobError, _SameOriginRedirectHandler
 PAGE_SIZE = 200
 # Access tokens live about an hour; get a fresh one before handing it to a download that may take a while
 TOKEN_REFRESH_AFTER_SEC = 20 * 60
+UPLOAD_TIMEOUT_SEC = 600
 
 _opener = urllib.request.build_opener(_SameOriginRedirectHandler)
 
@@ -88,14 +90,14 @@ class AbsClient:
         self._token_time = 0.0
 
     # ------------------------------------------------------------------ HTTP
-    def _send(self, method, path, body=None, headers=None, auth=True):
+    def _send(self, method, path, body=None, headers=None, auth=True, timeout=None):
         url = path if path.startswith("http") else f"{self.base_url}{path}"
         headers = {"User-Agent": f"abs-transcriber/{__version__}", **(headers or {})}
         if auth and self._access_token:
             headers["Authorization"] = f"Bearer {self._access_token}"
         request = urllib.request.Request(url, data=body, method=method, headers=headers)
         try:
-            with _opener.open(request, timeout=self.timeout) as response:
+            with _opener.open(request, timeout=timeout or self.timeout) as response:
                 data = response.read()
                 if response.headers.get("Content-Encoding", "").lower() == "gzip":
                     data = gzip.decompress(data)
@@ -110,12 +112,12 @@ class AbsClient:
         except TimeoutError:
             raise AbsError(f"{self.base_url} did not answer in time") from None
 
-    def _request(self, method, path, body=None, headers=None):
+    def _request(self, method, path, body=None, headers=None, timeout=None):
         """Authenticated request; refreshes the session once when the access token has expired"""
-        status, data = self._send(method, path, body, headers)
+        status, data = self._send(method, path, body, headers, timeout=timeout)
         if status == 401 and self._refresh_token:
             self.refresh()
-            status, data = self._send(method, path, body, headers)
+            status, data = self._send(method, path, body, headers, timeout=timeout)
         if status == 401:
             raise AbsError("The server ended the session; sign in again", 401)
         if status >= 400:
@@ -192,6 +194,13 @@ class AbsClient:
         user = self.user or {}
         return user.get("type") in ("root", "admin") or bool(user.get("permissions", {}).get("update"))
 
+    @property
+    def can_add_ebooks(self):
+        """Adding an ebook file to a book needs permission to upload and to update items (root always has both)"""
+        user = self.user or {}
+        permissions = user.get("permissions", {})
+        return user.get("type") == "root" or (bool(permissions.get("update")) and bool(permissions.get("upload")))
+
     # ------------------------------------------------------------------ data
     def book_libraries(self):
         return [library for library in self._json("GET", "/api/libraries")["libraries"] if library.get("mediaType") == "book"]
@@ -211,14 +220,29 @@ class AbsClient:
     def item(self, item_id):
         return self._json("GET", f"/api/items/{urllib.parse.quote(item_id)}?expanded=1")
 
-    def upload_transcript(self, item_id, transcript):
-        """Upload a v1 transcript (gzipped JSON, like the web client)"""
+    def _upload_file(self, path, field_name, filename, content, content_type, timeout=None):
+        """POST one file as multipart/form-data; returns the JSON answer"""
         boundary = f"----abs-transcriber-{uuid.uuid4().hex}"
-        content = gzip.compress(json.dumps(transcript, separators=(",", ":")).encode("utf-8"))
+        filename = filename.replace('"', "'").replace("\r", "").replace("\n", "")
         body = (
-            f'--{boundary}\r\nContent-Disposition: form-data; name="transcript"; filename="transcript.json.gz"\r\nContent-Type: application/gzip\r\n\r\n'.encode("utf-8")
+            f'--{boundary}\r\nContent-Disposition: form-data; name="{field_name}"; filename="{filename}"\r\nContent-Type: {content_type}\r\n\r\n'.encode("utf-8")
             + content
             + f"\r\n--{boundary}--\r\n".encode("utf-8")
         )
-        data = self._request("POST", f"/api/items/{urllib.parse.quote(item_id)}/transcript", body, {"Content-Type": f"multipart/form-data; boundary={boundary}"})
+        data = self._request("POST", path, body, {"Content-Type": f"multipart/form-data; boundary={boundary}"}, timeout=timeout)
         return json.loads(data) if data else {}
+
+    def upload_transcript(self, item_id, transcript):
+        """Upload a v1 transcript (gzipped JSON, like the web client)"""
+        content = gzip.compress(json.dumps(transcript, separators=(",", ":")).encode("utf-8"))
+        return self._upload_file(f"/api/items/{urllib.parse.quote(item_id)}/transcript", "transcript", "transcript.json.gz", content, "application/gzip")
+
+    def upload_ebook(self, item_id, path):
+        """Add an ebook file to the book's folder on the server (POST /api/items/:id/ebook); returns the expanded item"""
+        with open(path, "rb") as f:
+            content = f.read()
+        return self._upload_file(f"/api/items/{urllib.parse.quote(item_id)}/ebook", "ebook", os.path.basename(path), content, "application/epub+zip", timeout=UPLOAD_TIMEOUT_SEC)
+
+    def set_primary_ebook(self, item_id, ino):
+        """Make a supplementary ebook file of the book its main ebook (the main one becomes supplementary)"""
+        self._request("PATCH", f"/api/items/{urllib.parse.quote(item_id)}/ebook/{urllib.parse.quote(ino)}/status")

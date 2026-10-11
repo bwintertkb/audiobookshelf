@@ -2,6 +2,8 @@
 
 Sign in, pick books without a transcript, and the app downloads each book's audio, transcribes it with
 faster-whisper on the GPU, uploads the transcript to the server and deletes the downloaded audio.
+"Add EPUB…" uploads an EPUB from this computer to a book and makes its transcript from the ebook's text, so the
+narration is highlighted in the book in the ebook reader.
 
 Start it with "ABS Transcriber.bat" (no console window) or: .venv\\Scripts\\python transcriber_app.py
 Settings (server address, user name, options; never the password) are kept in app-settings.json next to this file.
@@ -16,7 +18,7 @@ import time
 import tkinter as tk
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from tkinter import messagebox, ttk
+from tkinter import filedialog, messagebox, ttk
 
 HERE = Path(__file__).resolve().parent
 SETTINGS_PATH = HERE / "app-settings.json"
@@ -150,6 +152,8 @@ class TranscriberWindow:
         ttk.Checkbutton(options, text="Use the ebook's text when the book has an EPUB (read-along in the ebook reader)", variable=self.use_ebook).pack(side="left")
         self.transcribe_button = ttk.Button(options, text="Transcribe selected", command=self.transcribe_selected)
         self.transcribe_button.pack(side="right")
+        self.add_ebook_button = ttk.Button(options, text="Add EPUB…", command=self.add_ebook)
+        self.add_ebook_button.pack(side="right", padx=(0, 6))
         from transcribe_helper.languages import WHISPER_LANGUAGES
 
         self.languages = [("book", "Book's language (else detect)"), ("detect", "Detect from the audio")] + sorted(WHISPER_LANGUAGES.items(), key=lambda item: item[1])
@@ -304,6 +308,49 @@ class TranscriberWindow:
         if len(added) < len(books):
             self.server_status.configure(text=f"{len(books) - len(added)} of the selected books are already in the queue")
 
+    def add_ebook(self):
+        """Upload an EPUB from this computer to the selected book, then transcribe the book with the EPUB's text"""
+        books = [self.book_rows[i] for i in self.books_tree.selection() if i in self.book_rows]
+        if len(books) != 1 or not self.signed_in or self.busy:
+            return
+        book = books[0]
+        if book.has_epub:
+            messagebox.showinfo("ABS Transcriber", f"'{book.title}' already has an EPUB. Use \"Transcribe selected\" to make its transcript from the ebook's text.")
+            return
+        path = filedialog.askopenfilename(parent=self.root, title=f"Choose the EPUB of '{book.title}'", filetypes=[("EPUB ebooks", "*.epub")], initialdir=self.settings.get("ebookDir") or None)
+        if not path:
+            return
+        path = Path(path)
+        self.settings["ebookDir"] = str(path.parent)
+        save_settings(self.settings)
+        language = self.languages[self.language.current()][0]
+
+        def uploaded(task, error):
+            self.set_signed_in(True)
+            if error:
+                self.server_status.configure(text=f"Adding the EPUB failed: {error}")
+                messagebox.showerror("ABS Transcriber", f"Adding {path.name} to '{book.title}' failed:\n\n{error}")
+                return
+            self.server_status.configure(text=f"Added {path.name} to '{book.title}'" + ("; its transcript is in the queue" if task else ""))
+            self.show_books()
+
+        def inspected(info, error):
+            self.set_signed_in(True)
+            if error:
+                messagebox.showerror("ABS Transcriber", str(error))
+                return
+            lines = [f"Add {path.name} to '{book.title}' on the server?", "", f"EPUB title: {info['title'] or '(none)'}", f"{info['words']:,} words"]
+            if not info["titleMatches"]:
+                lines += ["", "The EPUB's title is not like the book's. Check it is the same book: its text has to match the narration."]
+            if book.ebook_format:
+                lines += ["", f"The EPUB becomes the main ebook; the book's {book.ebook_format.upper()} stays as an extra ebook."]
+            lines += ["", "Then the transcript is made from the EPUB's text, for read-along in the ebook reader" + (" (it replaces the current transcript)." if book.has_transcript else ".")]
+            if not messagebox.askyesno("ABS Transcriber", "\n".join(lines), icon="question" if info["titleMatches"] else "warning"):
+                return
+            self.run_in_background(lambda: self.controller.add_ebook(book, path, language=language), uploaded, f"Uploading {path.name}…")
+
+        self.run_in_background(lambda: self.controller.inspect_ebook(book, path), inspected, f"Reading {path.name}…")
+
     # ------------------------------------------------------------------ queue
     def selected_task(self):
         selection = self.queue_tree.selection()
@@ -388,6 +435,7 @@ class TranscriberWindow:
         self.sign_out_button.configure(state="normal" if signed_in and not self.busy else "disabled")
         self.refresh_button.configure(state="normal" if signed_in and not self.busy else "disabled")
         self.transcribe_button.configure(state="normal" if signed_in and self.books_tree.selection() else "disabled")
+        self.add_ebook_button.configure(state="normal" if signed_in and not self.busy and len(self.books_tree.selection()) == 1 else "disabled")
         task = self.selected_task()
         self.cancel_button.configure(state="normal" if task and task.status in ("waiting", "preparing", "downloading", "queued", "transcribing", "aligning") else "disabled")
         self.retry_button.configure(state="normal" if task and task.status in ("error", "upload_failed", "cancelled") and signed_in else "disabled")

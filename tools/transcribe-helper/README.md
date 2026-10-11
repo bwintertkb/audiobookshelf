@@ -18,7 +18,8 @@ transcript back to the browser, which uploads it to ABS. Nothing runs on the ABS
 ## Transcriber app (Windows)
 
 A window that does the whole job without the web page: it lists the books on your server, transcribes the ones
-you pick on this computer's GPU and uploads their transcripts.
+you pick on this computer's GPU and uploads their transcripts. It can also add an EPUB to a book, for read-along
+in the ebook reader.
 
 1. Do the setup below (`.venv` with `requirements.txt`; `check_gpu.py` should end with `OK`).
 2. Double-click **`ABS Transcriber.bat`** (or run `.\.venv\Scripts\python transcriber_app.py`).
@@ -36,9 +37,18 @@ you pick on this computer's GPU and uploads their transcripts.
    download the audio → transcribe (progress, speed, time remaining) → upload the transcript → **delete the
    downloaded audio**. **Cancel** stops a book, **Retry** repeats a failed one (files that were finished are not
    transcribed again; a failed upload is retried without transcribing).
+7. **Add EPUB…** adds an EPUB from this computer to a book that has none, so the narration is highlighted in the
+   book in the ebook reader (web and Android). Select the book, press **Add EPUB…** and pick the `.epub` file:
+   - The app reads it first: it must be a DRM-free EPUB with text. The confirmation shows the EPUB's title and
+     length, with a warning if the title does not look like the book's (the text has to match the narration).
+   - The EPUB is uploaded to the book's folder on the server and becomes its main ebook (an ebook in another
+     format, e.g. a PDF, stays as a supplementary ebook). The user must be allowed to upload and update books.
+   - The book is then queued for a transcript from the EPUB's text (with the language chosen above). If it already
+     has a transcript of the speech, that is reused: no audio is downloaded or transcribed and it takes seconds.
+   A book that already has an EPUB is transcribed from it with **Transcribe selected**.
 
 The password and the server's tokens are only kept in memory while the app runs. `app-settings.json` (next to
-the app, not committed) remembers the server address, user name and options. A transcript that could not be
+the app, not committed) remembers the server address, user name, options and the folder EPUBs were last added from. A transcript that could not be
 uploaded is kept in `cache/app/pending-uploads` and uploaded the next time you sign in; audio left behind by an
 app that was closed while downloading is deleted when it starts. The log is in `cache/transcriber-app.log`.
 
@@ -220,7 +230,8 @@ Unit tests cover offset merging, clamping, monotonic ordering, the format and sa
 reading (spine order, notes, DRM) and ebook alignment (front matter, intros, misheard words, chapter
 announcements, wrong ebook); job and API tests use a fake ABS server and a fake transcriber (downloads,
 auth errors, cancel/resume, one-job-at-a-time, path mapping, CORS/PNA, host checks, ebook mode).
-`tests/test_e2e.py` runs a real model (`tiny` by default, `TRANSCRIBE_HELPER_E2E_MODEL=large-v3-turbo`
+`tests/test_app.py` runs the transcriber app's controller against a fake ABS server (sign-in, queue, uploads,
+adding an EPUB and transcribing with its text). `tests/test_e2e.py` runs a real model (`tiny` by default, `TRANSCRIBE_HELPER_E2E_MODEL=large-v3-turbo`
 to change) on LibriVox tracks served by the fake ABS server, including a chapter aligned with the full
 Gutenberg EPUB; it is skipped when the samples or CUDA are missing.
 
