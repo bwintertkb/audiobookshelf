@@ -58,7 +58,7 @@ def main():
 
     from transcribe_helper.jobs import JobManager
     from transcribe_helper.server import create_app
-    from transcribe_helper.transcriber import Transcriber
+    from transcribe_helper.transcriber import Transcriber, audio_preparer
 
     def transcriber_factory(model_name):
         if config.device == "cuda" and not gpu_info["available"]:
@@ -67,7 +67,7 @@ def main():
         log.info("Model %s ready (loaded in %.1fs)", model_name, transcriber.load_sec)
         return transcriber
 
-    manager = JobManager(config, transcriber_factory, gpu_info=gpu_info)
+    manager = JobManager(config, transcriber_factory, gpu_info=gpu_info, audio_preparer=audio_preparer(config.batch_size))
     app = create_app(config, manager)
 
     import uvicorn

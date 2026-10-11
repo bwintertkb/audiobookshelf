@@ -40,6 +40,14 @@ STATUS_TEXT = {
 logger = logging.getLogger("transcriber_app")
 
 
+def status_text(task):
+    if task.status == "queued" and task.stage == "preparing":
+        return "Preparing the audio"
+    if task.status == "transcribing" and task.stage == "starting":
+        return "Starting transcription"
+    return STATUS_TEXT.get(task.status, task.status)
+
+
 def duration_text(seconds):
     seconds = int(seconds or 0)
     hours, rest = divmod(seconds, 3600)
@@ -377,9 +385,11 @@ class TranscriberWindow:
         for task in tasks:
             key = id(task)
             live.add(key)
-            status = STATUS_TEXT.get(task.status, task.status)
+            status = status_text(task)
             if task.status == "downloading":
                 progress = f"{task.download_progress * 100:.0f}%"
+            elif task.status == "queued" and task.stage_progress is not None:
+                progress = f"{task.stage_progress * 100:.0f}%"
             elif task.status in ("transcribing", "aligning", "uploading", "done"):
                 progress = f"{task.progress * 100:.0f}%"
             else:
@@ -396,10 +406,14 @@ class TranscriberWindow:
             if self.queue_tree.exists(self.task_rows[key]):
                 self.queue_tree.delete(self.task_rows[key])
             del self.task_rows[key]
-        current = next((t for t in tasks if t.status in ("transcribing", "aligning")), None) or next((t for t in tasks if t.status == "downloading"), None)
+        current = (
+            next((t for t in tasks if t.status in ("transcribing", "aligning")), None)
+            or next((t for t in tasks if t.status == "queued" and t.stage_progress is not None), None)
+            or next((t for t in tasks if t.status == "downloading"), None)
+        )
         if current:
-            value = current.download_progress if current.status == "downloading" else current.progress
-            self.progress.configure(value=value * 1000)
+            value = {"downloading": current.download_progress, "queued": current.stage_progress}.get(current.status, current.progress)
+            self.progress.configure(value=(value or 0) * 1000)
         else:
             self.progress.configure(value=0)
         # Books whose transcript was just uploaded leave the "without a transcript" list
@@ -457,7 +471,7 @@ def create_controller():
     from transcribe_helper.app_controller import TranscriberController
     from transcribe_helper.config import load_config
     from transcribe_helper.gpu import get_gpu_info
-    from transcribe_helper.transcriber import Transcriber
+    from transcribe_helper.transcriber import Transcriber, audio_preparer
 
     config = load_config()
     # Separate from the helper service's cache: the app deletes leftover downloads when it starts
@@ -469,7 +483,7 @@ def create_controller():
             raise RuntimeError(gpu_info.get("error") or "CUDA is not available")
         return Transcriber(model_name, device=config.device, compute_type=config.effective_compute_type, download_root=config.model_dir or None, batch_size=config.batch_size)
 
-    return TranscriberController(config, transcriber_factory, gpu_info=gpu_info)
+    return TranscriberController(config, transcriber_factory, gpu_info=gpu_info, audio_preparer=audio_preparer(config.batch_size))
 
 
 def setup_logging():

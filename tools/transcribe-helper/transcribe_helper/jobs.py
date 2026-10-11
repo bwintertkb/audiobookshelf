@@ -3,6 +3,10 @@
 Lifecycle: downloading -> queued -> transcribing [-> aligning] -> done | error | cancelled
 - Audio is downloaded as soon as a job is submitted (ABS access tokens expire after ~1 hour), then the
   token is dropped from memory. Jobs wait for the single GPU worker in the "queued" state.
+- With an audio_preparer, a queued job's audio is decoded and its speech found on the CPU ("stage":
+  "preparing") while the GPU transcribes the job before it, so the GPU can start on it right away. Only one
+  prepared job waits for the GPU at a time: a long book's audio takes gigabytes of memory. On the GPU, the
+  stage is "starting" until the first words are transcribed.
 - Per-file results are cached on disk keyed by (library item, file, model, requested language), so a
   cancelled or failed job that is submitted again skips files that were already transcribed. The cache
   for an item is cleared once a job for it completes.
@@ -95,6 +99,9 @@ class Job:
         self.ebook = None
         self.alignment = None
         self.status = "downloading"
+        self.stage = None  # "preparing" (queued) or "starting" (transcribing), before the GPU transcribes words
+        self.stage_progress = None
+        self._ahead = False  # holds the JobManager's slot for a prepared job waiting for the GPU
         self.progress = 0.0
         self.download_progress = 0.0
         self.current_file_index = None
@@ -126,6 +133,8 @@ class Job:
             "libraryItemId": self.library_item_id,
             "mode": self.mode,
             "status": self.status,
+            "stage": self.stage,
+            "stageProgress": None if self.stage_progress is None else round(self.stage_progress, 4),
             "progress": round(self.progress, 4),
             "downloadProgress": round(self.download_progress, 4),
             "currentFileIndex": self.current_file_index,
@@ -147,10 +156,16 @@ class Job:
 
 
 class JobManager:
-    def __init__(self, config, transcriber_factory, gpu_info=None):
-        """transcriber_factory(model_name) -> object with transcribe_file(path, language, beam_size, progress_cb, cancel_event)"""
+    def __init__(self, config, transcriber_factory, gpu_info=None, audio_preparer=None):
+        """transcriber_factory(model_name) -> object with transcribe_file(audio, language, beam_size, progress_cb, cancel_event)
+        audio_preparer(path, progress_cb=, cancel_event=) -> the audio transcribe_file takes, prepared on the CPU ahead of
+        the GPU (transcriber.audio_preparer); without it, transcribe_file gets the file's path"""
         self.config = config
         self._transcriber_factory = transcriber_factory
+        self._audio_preparer = audio_preparer
+        self._audio_queue = queue.Queue()
+        self._ahead_slot = threading.Semaphore(1)
+        self._audio_thread = None
         self._transcriber = None
         self.loaded_model = None
         self.model_state = "not_loaded"  # loading | ready | error
@@ -172,6 +187,9 @@ class JobManager:
         self.results_dir.mkdir(parents=True, exist_ok=True)
         self._worker = threading.Thread(target=self._gpu_worker, args=(preload_model,), name="gpu-worker", daemon=True)
         self._worker.start()
+        if self._audio_preparer:
+            self._audio_thread = threading.Thread(target=self._audio_worker, name="audio-worker", daemon=True)
+            self._audio_thread.start()
 
     def stop(self):
         self._stop.set()
@@ -179,8 +197,11 @@ class JobManager:
             if not job.is_terminal:
                 job.cancel_event.set()
         self._gpu_queue.put(None)
+        self._audio_queue.put(None)
         if self._worker:
             self._worker.join(timeout=10)
+        if self._audio_thread:
+            self._audio_thread.join(timeout=10)
 
     # ------------------------------------------------------------------ public API
     def health(self):
@@ -377,7 +398,62 @@ class JobManager:
             if job.is_terminal:
                 return
             job.status = "queued"
-        self._gpu_queue.put(job)
+        if self._audio_preparer and any(f["_cached"] is None for f in job.files):
+            self._audio_queue.put(job)
+        else:
+            self._gpu_queue.put(job)
+
+    # ------------------------------------------------------------------ audio phase
+    def _audio_worker(self):
+        """Prepares the audio of the next job (CPU) while the GPU transcribes the one before"""
+        while not self._stop.is_set():
+            job = self._audio_queue.get()
+            if job is None:
+                break
+            while not self._ahead_slot.acquire(timeout=0.5):  # the job prepared before is still waiting for the GPU
+                if self._stop.is_set():
+                    return
+            if self._prepare_audio(job):
+                job._ahead = True  # the GPU worker frees the slot when it takes the job
+                self._gpu_queue.put(job)
+            else:
+                self._drop_audio(job)
+                self._ahead_slot.release()
+
+    def _prepare_audio(self, job):
+        """Prepare the audio of the job's files that are not transcribed yet. False if the job is not going to the GPU."""
+        files = [f for f in job.files if f["_cached"] is None]
+        total = sum(float(f["duration"]) for f in files) or 1.0
+        done = 0.0
+        t0 = time.perf_counter()
+        try:
+            for f in files:
+                if job.is_terminal:
+                    return False
+                job.stage, job.stage_progress = "preparing", done / total
+
+                def progress(fraction, done=done, duration=float(f["duration"])):
+                    job.stage_progress = min(1.0, (done + fraction * duration) / total)
+
+                f["_audio"] = self._audio_preparer(f["_local"], progress_cb=progress, cancel_event=job.cancel_event)
+                done += float(f["duration"])
+        except TranscriptionCancelled:
+            self._finish(job, "cancelled")
+            return False
+        except Exception as error:
+            logger.exception("Job %s: preparing the audio failed", job.id)
+            self._finish(job, "error", "transcription_failed", f"Could not read the audio: {error}")
+            return False
+        finally:
+            job.stage, job.stage_progress = None, None
+        logger.info("Job %s: prepared %.0f s of audio in %.1fs", job.id, done, time.perf_counter() - t0)
+        with self._lock:
+            return not job.is_terminal
+
+    def _drop_audio(self, job):
+        """Prepared audio takes gigabytes for a long book: let it go as soon as it is not needed"""
+        for f in job.files:
+            f.pop("_audio", None)
 
     def _open(self, job, url, name):
         if not job._token:
@@ -487,7 +563,11 @@ class JobManager:
             job = self._gpu_queue.get()
             if job is None:
                 break
+            if job._ahead:
+                job._ahead = False
+                self._ahead_slot.release()  # the next job's audio can be prepared while this one is transcribed
             if job.is_terminal:
+                self._drop_audio(job)
                 continue
             with self._lock:
                 self.active_job = job
@@ -524,8 +604,10 @@ class JobManager:
 
                 spec_duration = float(f["duration"])
                 started_at = time.perf_counter()
+                job.stage = "starting"
 
                 def progress(processed, decoded_duration, done_audio=done_audio, spec_duration=spec_duration):
+                    job.stage = None
                     fraction = min(1.0, processed / decoded_duration) if decoded_duration else 0.0
                     current = done_audio + fraction * spec_duration
                     job.progress = min(1.0, current / total)
@@ -535,7 +617,10 @@ class JobManager:
                         speed = audio_done_now / elapsed
                         job.eta_sec = max(0.0, (total - current) / speed)
 
-                result = self._transcriber.transcribe_file(f["_local"], language=language, beam_size=job.beam_size or self.config.beam_size, progress_cb=progress, cancel_event=job.cancel_event)
+                audio = f.pop("_audio", None)
+                result = self._transcriber.transcribe_file(f["_local"] if audio is None else audio, language=language, beam_size=job.beam_size or self.config.beam_size, progress_cb=progress, cancel_event=job.cancel_event)
+                del audio
+                job.stage = None
                 language = language or result.get("language")
                 job.detected_language = language
                 results.append(result)
@@ -559,6 +644,9 @@ class JobManager:
             logger.exception("Job %s failed", job.id)
             self._finish(job, "error", "transcription_failed", str(error))
             return
+        finally:
+            job.stage = None
+            self._drop_audio(job)
         self._complete(job, transcript)
 
     def _complete(self, job, transcript, reused_base=False):
@@ -609,6 +697,7 @@ class JobManager:
             logger.warning("Job %s failed (%s): %s", job.id, error_code, error)
         else:
             logger.info("Job %s %s", job.id, status)
+        self._drop_audio(job)
         self._cleanup_downloads(job)
 
     def _cleanup_downloads(self, job):

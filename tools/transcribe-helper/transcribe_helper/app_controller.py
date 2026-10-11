@@ -1,8 +1,9 @@
 """The transcriber app without its window: sign in to an Audiobookshelf server, list its books, transcribe the
 chosen ones on this computer's GPU one at a time (JobManager) and upload each transcript.
 
-- The audio of a book is downloaded while the previous book is being transcribed (at most one book ahead), and
-  deleted as soon as its transcript is complete. Files read through path_mappings are never deleted.
+- The audio of a book is downloaded and prepared (decoded, its speech found) while the previous book is being
+  transcribed (at most one book ahead), and deleted as soon as its transcript is complete. Files read through
+  path_mappings are never deleted.
 - A finished transcript is kept in cache/pending-uploads until the server accepted it, so a failed upload can be
   retried (also after restarting the app) without transcribing again.
 - The password and tokens stay in memory (AbsClient); they are never logged or written to disk.
@@ -33,7 +34,7 @@ logger = logging.getLogger(__name__)
 WAITING = "waiting"
 PREPARING = "preparing"  # getting the book's details from the server
 DOWNLOADING = "downloading"
-QUEUED = "queued"  # audio downloaded, waiting for the GPU
+QUEUED = "queued"  # audio downloaded, being prepared (stage "preparing") or waiting for the GPU
 TRANSCRIBING = "transcribing"
 ALIGNING = "aligning"
 UPLOADING = "uploading"
@@ -61,6 +62,8 @@ class Task:
     mode: str  # "whisper" or "ebook"
     language: str = None  # Whisper code, None to detect
     status: str = WAITING
+    stage: str = None  # the job's stage: "preparing" the audio (queued) or "starting" (transcribing, no words yet)
+    stage_progress: float = None
     progress: float = 0.0
     download_progress: float = 0.0
     eta_sec: float = None
@@ -74,11 +77,11 @@ class Task:
 
 
 class TranscriberController:
-    def __init__(self, config, transcriber_factory, gpu_info=None, client_factory=AbsClient):
+    def __init__(self, config, transcriber_factory, gpu_info=None, client_factory=AbsClient, audio_preparer=None):
         config.keep_downloads = False  # the app always deletes downloaded audio
         self.config = config
         self.gpu_info = gpu_info or {}
-        self.manager = JobManager(config, transcriber_factory, gpu_info=self.gpu_info)
+        self.manager = JobManager(config, transcriber_factory, gpu_info=self.gpu_info, audio_preparer=audio_preparer)
         self.client_factory = client_factory
         self.client = None
         self.books = []
@@ -337,6 +340,10 @@ class TranscriberController:
             if local and local not in task.audio_files and Path(local).exists():
                 task.audio_files.append(local)
                 task.audio_bytes += Path(local).stat().st_size
+        if job.stage == "preparing" and task.stage != "preparing" and task.status != TRANSCRIBING:
+            self.note(f"Preparing the audio of '{task.book.title}' (decoding it and finding the speech)")
+        task.stage = job.stage
+        task.stage_progress = job.stage_progress
         if status == "downloading":
             task.status = DOWNLOADING
         elif status == "queued":
