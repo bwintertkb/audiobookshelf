@@ -10,6 +10,11 @@
       <button v-if="readAlongAvailable" @click="showAnnotations = true" type="button" :aria-label="$strings.HeaderNotesAndHighlights" class="inline-flex opacity-80 hover:opacity-100">
         <span class="material-symbols text-1.5xl">sticky_note_2</span>
       </button>
+      <ui-tooltip v-if="readAlongAvailable" :text="highlighterMode ? $strings.LabelHighlighterOn : $strings.LabelHighlighterOff" direction="bottom" class="ml-4">
+        <button @click="toggleHighlighter" type="button" :aria-label="$strings.ButtonHighlighter" :aria-pressed="highlighterMode ? 'true' : 'false'" class="inline-flex" :class="highlighterMode ? 'opacity-100' : 'opacity-80 hover:opacity-100'">
+          <span class="material-symbols text-1.5xl" :class="{ fill: highlighterMode }" :style="highlighterMode ? { color: highlighterSwatch } : null">ink_highlighter</span>
+        </button>
+      </ui-tooltip>
     </div>
 
     <div class="absolute top-4 left-1/2 transform -translate-x-1/2">
@@ -138,6 +143,7 @@
 
 <script>
 import { READ_ALONG_WORD_COUNTS, readAlongWordCount } from '@/players/transcriptUtils'
+import { ANNOTATION_SWATCHES, highlighterColor } from '@/players/annotations'
 
 export default {
   data() {
@@ -204,6 +210,13 @@ export default {
       set(value) {
         this.$store.dispatch('user/updateUserSettings', { syncReadingListening: value })
       }
+    },
+    /** Highlighter pen: selected words are highlighted right away, without the menu (user setting, shared with the transcript) */
+    highlighterMode() {
+      return !!this.$store.getters['user/getUserSetting']('highlighterMode')
+    },
+    highlighterSwatch() {
+      return ANNOTATION_SWATCHES[highlighterColor(this.$store.getters['user/getUserSetting']('highlighterColor'))]
     },
     /** Chapters of the audiobook, to say where highlights are */
     audioChapters() {
@@ -331,6 +344,11 @@ export default {
     }
   },
   methods: {
+    toggleHighlighter() {
+      const on = !this.highlighterMode
+      this.$store.dispatch('user/updateUserSettings', { highlighterMode: on })
+      this.$toast.info(on ? this.$strings.ToastHighlighterOn : this.$strings.ToastHighlighterOff)
+    },
     goToAnnotation(annotation) {
       this.showAnnotations = false
       this.$refs.readerComponent?.goToAnnotation?.(annotation)

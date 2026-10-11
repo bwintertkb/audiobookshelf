@@ -29,7 +29,7 @@
 import ePub from 'epubjs'
 import ReadAlong from '@/players/ReadAlong'
 import { readAlongWordCount } from '@/players/transcriptUtils'
-import { wordsText } from '@/players/annotations'
+import { createAnnotation, highlighterColor, wordsText } from '@/players/annotations'
 import { getAnnotationStore } from '@/players/annotationStore'
 import { loadTranscript as fetchTranscript } from '@/players/transcriptCache'
 
@@ -298,8 +298,20 @@ export default {
       this.readAlong.goToTime(annotation.start)
       this.startReadAlongLoop()
     },
-    openPopup({ first, last, rect, annotation }) {
+    openPopup({ first, last, rect, annotation, selected }) {
       const index = this.readAlong.index
+      // The highlighter pen: selected words are highlighted right away, without the menu
+      const getUserSetting = this.$store.getters['user/getUserSetting']
+      if (selected && !annotation && getUserSetting?.('highlighterMode')) {
+        this.readAlong.clearTextSelection()
+        getAnnotationStore(this.$axios)
+          .save(this.libraryItemId, createAnnotation(index, first, last, { color: highlighterColor(getUserSetting('highlighterColor')) }))
+          .catch((error) => {
+            console.error('EpubReader highlight failed', error)
+            this.$toast.error(this.$strings.ToastHighlightSaveFailed)
+          })
+        return
+      }
       this.popup = {
         selection: { first, last, text: wordsText(index, first, last), start: index.wordStarts[first], end: index.wordStarts[last] },
         annotation,

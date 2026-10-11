@@ -105,7 +105,8 @@ export default class ReadAlong {
    * @param {(time: number) => void} [options.onSeek] - a word was clicked
    * @param {() => void} [options.onFollowChanged] - following was paused or resumed
    * @param {(selection: {first: number, last: number, rect: Object, annotation: Object|null}) => void} [options.onSelect] - words were
-   *   selected, right-clicked or long-pressed (rect: where they are in the reader's window)
+   *   selected, right-clicked or long-pressed (rect: where they are in the reader's window; selected: chosen by selecting text
+   *   or long-press and drag, not by asking for the menu with a right-click)
    */
   constructor({ rendition, transcript, highlightWords = DEFAULT_READ_ALONG_WORDS, onSeek, onFollowChanged, onSelect }) {
     this.rendition = rendition
@@ -644,7 +645,7 @@ export default class ReadAlong {
       if (!selection || selection.isCollapsed || !selection.rangeCount) return
       const range = selection.getRangeAt(0)
       const words = this.wordsInRange(spine, range)
-      if (words) this.onSelect({ ...words, rect: this.rectInReader(this.sections.get(spine), range), annotation: null })
+      if (words) this.onSelect({ ...words, rect: this.rectInReader(this.sections.get(spine), range), annotation: null, selected: true })
     })
   }
 

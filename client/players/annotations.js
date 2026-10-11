@@ -25,6 +25,11 @@ export const ANNOTATION_SWATCHES = {
   orange: '#fb923c'
 }
 
+/** Colour of the highlighter pen (user setting highlighterColor: the colour last picked) */
+export function highlighterColor(value) {
+  return ANNOTATION_COLORS.includes(value) ? value : DEFAULT_ANNOTATION_COLOR
+}
+
 /** Word start times are stored rounded by JSON; matching allows for that */
 const TIME_TOLERANCE_SEC = 0.005
 

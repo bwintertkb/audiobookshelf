@@ -142,7 +142,7 @@ describe('<EpubReader /> read along', () => {
           return Promise.resolve({ annotation: data })
         }
       },
-      $store: { state, getters: { 'libraries/getLibraryEpubsAllowScriptedContent': false, 'user/getUserMediaProgress': () => progress, 'user/getUserSetting': (key) => settings[key] ?? null, 'user/getUserBookmarksForItem': () => [] } },
+      $store: { state, dispatch: (action, payload) => (action === 'user/updateUserSettings' ? Object.assign(settings, payload) : null), getters: { 'libraries/getLibraryEpubsAllowScriptedContent': false, 'user/getUserMediaProgress': () => progress, 'user/getUserSetting': (key) => settings[key] ?? null, 'user/getUserBookmarksForItem': () => [] } },
       $eventBus: eventBus,
       $strings: Strings,
       $getString: (key) => Strings[key],
@@ -395,6 +395,27 @@ describe('<EpubReader /> read along', () => {
       cy.get(`.readalong-popup button[aria-label="${Strings.ButtonHighlight}: ${Strings.LabelColorYellow}"]`).click()
       cy.then(() => expect(saved[0]).to.include({ start: words[20].start, end: words[23].start, text: wordsText(20, 23), color: 'yellow' }))
       cy.wrap(null).should(() => expect(highlightedRanges('abs-readalong-annotation-yellow')).to.deep.equal([wordsText(20, 23)]))
+    })
+  })
+
+  it('highlights selected words right away with the highlighter on', () => {
+    mount({ settings: Vue.observable({ readAlongWords: null, highlighterMode: true, highlighterColor: 'pink' }) }).then(({ vm, saved }) => {
+      cy.wrap(null, { timeout: 10000 }).should(() => expect(highlighted(WORD_HIGHLIGHT)).to.equal(group(0)))
+      cy.then(() => {
+        const first = vm.readAlong.wordRange(30)
+        const last = vm.readAlong.wordRange(32)
+        first.entry.doc.getSelection().setBaseAndExtent(first.range.startContainer, first.range.startOffset, last.range.endContainer, last.range.endOffset)
+        mouseAtWord(vm, 32, 'mouseup', { button: 0 })
+      })
+      cy.wrap(null).should(() => expect(highlightedRanges('abs-readalong-annotation-pink')).to.deep.equal([wordsText(30, 32)]))
+      cy.get('.readalong-popup').should('not.exist')
+      cy.then(() => {
+        expect(saved[0]).to.include({ start: words[30].start, end: words[32].start, color: 'pink' })
+        expect(vm.readAlong.wordRange(30).entry.doc.getSelection().isCollapsed).to.be.true
+      })
+      // A right-click still opens the menu
+      cy.then(() => mouseAtWord(vm, 31, 'contextmenu'))
+      cy.get('.readalong-popup').should('exist')
     })
   })
 

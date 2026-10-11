@@ -74,6 +74,7 @@ This uses the [CSS Custom Highlight API](https://developer.mozilla.org/en-US/doc
 Highlight the transcript or the book like on a Kindle:
 
 - **Choose words**: in the web client select words with the mouse, or right-click a word; in the app long-press a word, and keep the finger down and drag to choose more. A single word shows its definition.
+- **Highlighter** (pen button in the transcript panel and the reader's top bar, shared): while it is on, words you select are highlighted right away in the colour you picked last, without the menu. Right-click (or long-press, in the app) a highlight to change it, add a note or delete it.
 - **Highlight** in yellow, blue, pink or orange; **Note** adds a note (marked with a note icon after the highlight in the transcript). Choosing a highlighted word again opens the highlight to change its colour or note, or delete it.
 - **Notes & highlights** (note icon in the transcript panel and the reader) lists them in book order with their chapter and time: go to one, edit its note, delete it, or **Export** them all as a Markdown file (the app shares the file).
 - Highlights are stored on the server per user, so the web client and the app show the same ones (changes made on another device appear when the book is reopened, or right away while it is open). The app keeps them for reading offline and sends highlights made offline when it is connected again.

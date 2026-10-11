@@ -487,6 +487,38 @@ describe('<TranscriptPanel />', () => {
       })
     })
 
+    it('highlights selected words right away with the highlighter on, in the colour picked last', () => {
+      mountEbookPanel({ settings: { highlighterMode: false, highlighterColor: 'yellow' } }).then(({ vm, request, settings, mocks }) => {
+        // Picking a colour in the menu makes it the highlighter's colour
+        cy.get('[data-wi="21"]').rightclick()
+        cy.get(`.readalong-popup button[aria-label="${Strings.ButtonHighlight}: ${Strings.LabelColorOrange}"]`).click()
+        cy.then(() => expect(settings.highlighterColor).to.equal('orange'))
+        cy.get('.readalong-popup button[aria-label="Close"]').click()
+
+        cy.get(`button[aria-label="${Strings.ButtonHighlighter}"]`).should('have.attr', 'aria-pressed', 'false').click()
+        cy.then(() => {
+          expect(settings.highlighterMode).to.equal(true)
+          expect(mocks.$toast.info).to.have.been.calledWith(Strings.ToastHighlighterOn)
+        })
+        cy.get(`button[aria-label="${Strings.ButtonHighlighter}"]`).should('have.attr', 'aria-pressed', 'true')
+        cy.then(() => {
+          const from = vm.$refs.window.querySelector('[data-wi="24"]').firstChild
+          const to = vm.$refs.window.querySelector('[data-wi="26"]').firstChild
+          window.getSelection().setBaseAndExtent(from, 0, to, to.length)
+        })
+        cy.get('[data-wi="26"]').trigger('mouseup', { button: 0 })
+        cy.wrap(null).should(() => expect(highlightText('abs-transcript-annotation-orange')).to.include('a large lovely'))
+        cy.get('.readalong-popup').should('not.exist')
+        cy.then(() => {
+          expect(request.saved.find((a) => a.text === 'a large lovely')).to.include({ color: 'orange', start: vm.index.wordStarts[24], end: vm.index.wordStarts[26] })
+          expect(window.getSelection().isCollapsed).to.be.true
+        })
+        // Right-click still opens the menu, to change a highlight or add a note
+        cy.get('[data-wi="25"]').rightclick()
+        cy.get('.readalong-popup').should('exist').find(`button[aria-label="${Strings.ButtonDeleteHighlight}"]`).should('exist')
+      })
+    })
+
     it('shows highlights saved before, from the server', () => {
       const saved = [{ id: 'annotation-1', start: 30, end: 31.2, text: '“How happy we are', color: 'orange', note: 'Joy', createdAt: 1, updatedAt: 1 }]
       mountEbookPanel({ request: annotationRequest(saved) }).then(() => {

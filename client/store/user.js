@@ -35,7 +35,10 @@ export const state = () => ({
     // When a sleep timer ends: 'sentence' or 'paragraph' finishes it first (books with a transcript), 'off' stops right away
     sleepTimerFinish: 'sentence',
     // The browser's media controls show the sentence being read
-    readAlongMediaSession: true
+    readAlongMediaSession: true,
+    // Highlighter pen: selected words are highlighted right away (no menu), in the colour last picked
+    highlighterMode: false,
+    highlighterColor: 'yellow'
   }
 })
 

@@ -8,6 +8,11 @@
       <ui-tooltip :text="$strings.ButtonSearch" direction="bottom">
         <button class="transcript-icon-btn" :class="showSearch ? 'text-white' : ''" :aria-label="$strings.ButtonSearch" @click="toggleSearch"><span class="material-symbols text-xl">search</span></button>
       </ui-tooltip>
+      <ui-tooltip :text="highlighterMode ? $strings.LabelHighlighterOn : $strings.LabelHighlighterOff" direction="bottom">
+        <button class="transcript-icon-btn" :aria-label="$strings.ButtonHighlighter" :aria-pressed="highlighterMode ? 'true' : 'false'" @click="toggleHighlighter">
+          <span class="material-symbols text-xl" :class="{ fill: highlighterMode }" :style="highlighterMode ? { color: swatches[highlighterColor] } : null">ink_highlighter</span>
+        </button>
+      </ui-tooltip>
       <ui-tooltip :text="$strings.LabelTranscriptDisplay" direction="bottom">
         <button class="transcript-icon-btn" :class="showDisplayMenu ? 'text-white' : ''" :aria-label="$strings.LabelTranscriptDisplay" :aria-expanded="showDisplayMenu ? 'true' : 'false'" @click="showDisplayMenu = !showDisplayMenu"><span class="material-symbols text-xl">match_case</span></button>
       </ui-tooltip>
@@ -102,7 +107,7 @@
 
 <script>
 import { READ_ALONG_WORD_COUNTS, buildTranscriptIndex, findLastLessOrEqual, findPosition, getTranscriptAudioMismatch, highlightedWords, readAlongWordCount, searchTranscript } from '@/players/transcriptUtils'
-import { ANNOTATION_COLORS, annotationWordRanges, annotationsAtWord, wordsText } from '@/players/annotations'
+import { ANNOTATION_COLORS, ANNOTATION_SWATCHES, annotationWordRanges, annotationsAtWord, createAnnotation, highlighterColor, wordsText } from '@/players/annotations'
 import { getAnnotationStore } from '@/players/annotationStore'
 import { loadTranscript as fetchTranscript } from '@/players/transcriptCache'
 
@@ -163,6 +168,7 @@ export default {
       minFontScale: 0.75,
       maxFontScale: 2,
       popup: null,
+      swatches: ANNOTATION_SWATCHES,
       // The highlighted words are one highlight, spaces included; without the API each word is highlighted
       highlightApi: !!(window.CSS?.highlights && window.Highlight)
     }
@@ -260,6 +266,13 @@ export default {
       set(count) {
         this.$store.dispatch('user/updateUserSettings', { readAlongWords: count })
       }
+    },
+    /** Highlighter pen: selected words are highlighted right away, without the menu (user setting, shared with the reader) */
+    highlighterMode() {
+      return !!this.userSetting('highlighterMode')
+    },
+    highlighterColor() {
+      return highlighterColor(this.userSetting('highlighterColor'))
     },
     readAlongWordsItems() {
       return READ_ALONG_WORD_COUNTS.map((count) => ({ text: String(count), value: count }))
@@ -749,9 +762,28 @@ export default {
       setTimeout(() => {
         const words = this.selectedWords()
         if (!words) return
+        if (this.highlighterMode) {
+          window.getSelection().removeAllRanges()
+          this.quickHighlight(words.first, words.last)
+          return
+        }
         const rect = window.getSelection().getRangeAt(0).getBoundingClientRect()
         this.openPopup(words.first, words.last, rect)
       })
+    },
+    toggleHighlighter() {
+      const on = !this.highlighterMode
+      this.$store.dispatch('user/updateUserSettings', { highlighterMode: on })
+      this.$toast.info(on ? this.$strings.ToastHighlighterOn : this.$strings.ToastHighlighterOff)
+    },
+    /** The highlighter pen: highlight the words in its colour, without the menu */
+    async quickHighlight(first, last) {
+      try {
+        await getAnnotationStore(this.$axios).save(this.libraryItem.id, createAnnotation(this.index, first, last, { color: this.highlighterColor }))
+      } catch (error) {
+        console.error('[TranscriptPanel] Failed to save highlight', error)
+        this.$toast.error(this.$strings.ToastHighlightSaveFailed)
+      }
     },
     /** Right-click (or long-press on touch screens) a word: its definition and the highlight menu */
     onContextMenu(event) {

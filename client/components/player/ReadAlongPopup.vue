@@ -162,6 +162,8 @@ export default {
       }
     },
     highlight(color) {
+      // The highlighter pen uses the colour picked last
+      this.$store.dispatch('user/updateUserSettings', { highlighterColor: color })
       if (this.current?.color === color) return
       this.saveAnnotation({ color })
     },
